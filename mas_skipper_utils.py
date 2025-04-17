@@ -108,12 +108,11 @@ def show_fits_image(filename, index = 1, cmap="gray"):
 def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min_points=5):
     """
     Grafica V(M1' - M1) vs M1 + M1' para una extensión específica del MAS-CCD Skipper y muestra el ROI.
-
-    NOTA: ROI DINÁMICO
+    Guarda las figuras generadas en el mismo directorio que los archivos FITS.
     """
     gains = {}
     exposure_times = defaultdict(list)
-    all_rois = []  # List to store all ROIs
+    all_rois = []
 
     for file_path in path_files:
         with fits.open(file_path) as hdulist:
@@ -129,8 +128,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     for exptime in exposure_time_keys:
         files = exposure_times[exptime]
         if len(files) >= 2:
-            file1, file2 = files[:2]  # Take the first two files
-            print(f"file1: {file1}, file2: {file2}")
+            file1, file2 = files[:2]
             with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
                 if extension_number >= len(hdul1) or extension_number >= len(hdul2):
                     continue
@@ -152,39 +150,43 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
                     extension_sum_of_means.append(sum_of_mean)
                     all_rois.append((data1_roi, data2_roi, file1, file2))
 
-    # Create a single figure for all ROIs
-    num_rois = len(all_rois)
-    if num_rois > 0:
-        rows = 6
-        cols = 4
+    # ---- PLOT ROIs ----
+    if len(all_rois) > 0:
+        rows, cols = 6, 4
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
         for i, (data1_roi, data2_roi, file1, file2) in enumerate(all_rois):
-            zscale1 = ZScaleInterval()
-            zlow1, zhigh1 = zscale1.get_limits(data1_roi)
-            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start]) #Set extent
-            axes[2*i].invert_yaxis() #Invert Y axis
+            zlow1, zhigh1 = ZScaleInterval().get_limits(data1_roi)
+            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i].invert_yaxis()
             contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
             exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
             axes[2*i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
-            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8, verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color ="red")
+            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8,
+                           verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
 
-            zscale2 = ZScaleInterval()
-            zlow2, zhigh2 = zscale2.get_limits(data2_roi)
-            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start]) #Set extent
-            axes[2*i+1].invert_yaxis() #Invert Y axis
+            zlow2, zhigh2 = ZScaleInterval().get_limits(data2_roi)
+            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i+1].invert_yaxis()
             contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
             exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
             axes[2*i+1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
-            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8, verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8,
+                             verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
 
         fig_rois.tight_layout()
-        fig_rois.show()
+
+        # Guardar ROI plot
+        roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
+        roi_dir = os.path.dirname(path_files[0])
+        fig_rois_path = os.path.join(roi_dir, f"{roi_base}_ext{extension_number}_rois.png")
+        fig_rois.savefig(fig_rois_path)
+        print(f"Saved ROI plot to {fig_rois_path}")
+        #plt.close(fig_rois)
 
     if len(extension_variances) < 4:
         print(f"No suficientes puntos para la extensión {extension_number}")
-        plt.close()
         return None
 
     extension_variances = np.array(extension_variances)
@@ -193,22 +195,29 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
     if slope is None:
         print(f"No se pudo realizar el ajuste para la extensión {extension_number}")
-        plt.close()
         return None
 
     gains[extension_number] = 1 / slope
 
+    # ---- PLOT GANANCIA ----
     fig_gain, ax_gain = plt.subplots(figsize=(8, 6))
     ax_gain.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {extension_number}', color="blue", markersize=5)
     fit_line = np.polyval([slope, intercept], extension_variances)
-    ax_gain.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
-    gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
-    ax_gain.text(0.05, 0.95, gain_text, transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
+    ax_gain.plot(extension_variances, fit_line, 'r--', label=f'Fit')
+    ax_gain.text(0.05, 0.95, f"Gain: {1 / slope:.3f} e-/ADU", transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
     ax_gain.set_xlabel("Varianza de la diferencia")
     ax_gain.set_ylabel("Suma de Medias")
     ax_gain.grid()
+    ax_gain.legend()
     fig_gain.tight_layout()
-    fig_gain.show()
+
+    # Guardar plot de ganancia
+    gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
+    gain_dir = os.path.dirname(path_files[0])
+    fig_gain_path = os.path.join(gain_dir, f"{gain_base}_ext{extension_number}_gainplot.png")
+    fig_gain.savefig(fig_gain_path)
+    print(f"Saved gain plot to {fig_gain_path}")
+    #plt.close(fig_gain)
 
     return list(gains.values())
 
@@ -285,7 +294,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     if len(extension_exptimes) < 4:
         print(f"No suficientes puntos para la extensión {extension_number}")
-        plt.close()
+        #plt.close()
         return None
 
     # Fit Lineal y Full Well
