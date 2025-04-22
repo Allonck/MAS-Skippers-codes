@@ -96,19 +96,195 @@ def show_fits_image(filename, index = 1, cmap="gray"):
     zlow, zhigh = zscale.get_limits(image_data)
 
     fig, ax = plt.subplots(figsize=(16, 9))
-
     im = ax.imshow(image_data, cmap=cmap, clim=(zlow, zhigh))
-
     # Create colorbar with same height as the y-axis
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="1.5%", pad=0.05)
     fig = ax.figure
     fig.colorbar(im, cax=cax)
+    ax.invert_yaxis() #added this line
+
+def show_multi_fits_image(filename):
+    """
+    Displays all data-containing extensions of a FITS file.
+
+    Args:
+        filename (str): The path to the FITS file.
+
+    Returns:
+        None
+
+    Example:
+        >>> show_multi_fits_image("example.fits")
+
+    Notes:
+        - This function iterates over all extensions in the FITS file and uses 
+          `show_fits_image` to display the extensions that contain valid data.
+        - If an extension does not contain data, it is skipped with a message logged 
+          to the console.
+    """
+    with fits.open(filename) as hdulist:
+        print(f"Displaying file: {filename}")
+        # Iterate over all extensions
+        for i, hdu in enumerate(hdulist):
+            if hdu.data is not None:
+                print(f"  Extension {i}: Data shape = {hdu.data.shape}")
+                # Example: Show the image for this extension
+                show_fits_image(filename, index=i, cmap='gray')
+
+def combine_fits_extensions(path_files, extensions, output_file, method='mean'):
+    """
+    Combine multiple FITS extensions into a single image and save to a new FITS file.
+
+    Args:
+        path_files (str): Path to the input FITS file.
+        extensions (list): List of extension indices to combine.
+        output_file (str): Name of the output FITS file.
+        method (str): Combination method to use. Options are 'mean', 'median', or 'sum'.
+
+    Returns:
+        None
+
+    Notes:
+        - This function is not designed to handle a list of FITS files. 
+          Use a loop externally if multiple files need to be processed.
+        - Extensions without data will be skipped with a warning.
+    """
+    with fits.open(path_files) as hdul:
+        if max(extensions) >= len(hdul):
+            raise ValueError("One or more of the specified extensions do not exist in the FITS file.")
+
+        images = []
+        for ext in extensions:
+            if hdul[ext].data is not None:
+                images.append(hdul[ext].data)
+            else:
+                print(f"Warning: Extension {ext} contains no data and will be skipped.")
+
+        if not images:
+            raise ValueError("No data found in the selected extensions.")
+
+        if method == 'mean':
+            combined_data = np.mean(images, axis=0)
+        elif method == 'median':
+            combined_data = np.median(images, axis=0)
+        elif method == 'sum':
+            combined_data = np.sum(images, axis=0)
+        else:
+            raise ValueError("Invalid method. Use 'mean', 'median', or 'sum'.")
+
+        combined_hdul = fits.HDUList([
+            fits.PrimaryHDU(),
+            fits.ImageHDU(data=combined_data)
+        ])
+
+        combined_hdul.writeto(output_file, overwrite=True)
+        print(f"Combined image saved to: {output_file}")
+        # Display the image (requires your own FITS viewer function)
+        show_fits_image(output_file, index=1, cmap='gray')
+
+
+def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
+    """
+    Loads, processes, and combines the specified extensions from a FITS file,
+    removes specified extensions, averages the remaining images, and saves and displays the result.
+
+    Args:
+        path_files (str): Path to the input FITS file.
+        output_file (str): Name of the output FITS file to save.
+        indices_to_remove(array): Indices to remove from the averaging.
+
+    Returns:
+        hdu
+    Note: This cannot handle lists. A for loop is needed to use it.
+    """
+    # Define the order of extensions
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
+    cut_size = 512
+    gap = 15
+
+    # Get prescan, overscan (biassec) and NCOL from the FITS header
+    hdul = fits.open(path_files)
+    hdr = hdul[1].header  # Assuming the trimsec and biassec are in the first extension header
+    trimsec = hdr['TRIMSEC']
+    biassec = hdr['BIASSEC']
+
+    trimsec_list = list(map(int, trimsec.strip("[]").replace(",", ":").split(":")))
+    prescan = trimsec_list[0]
+
+    biassec_list = list(map(int, biassec.strip("[]").replace(",", ":").split(":")))
+    overscan = biassec_list[1] - biassec_list[0] #Calculate the width of the overscan.
+
+    ncol = int(hdul[2].header['NCOL'])
+    pad_right = ncol - cut_size
+
+    hdul.close()
+
+    # Collect the processed images
+    image_collector = []
+
+    # Load and process the images
+    for i, ext in enumerate(extensions):
+        image_data = fits.getdata(path_files, i + 1)
+        image_data = image_data[:, (gap * (ext - 1)):(gap * (ext - 1)) + cut_size + prescan + overscan]
+        image_data = np.pad(image_data, ((0, 0), (0, pad_right - prescan - overscan)), mode='constant', constant_values=0)
+        image_collector.append(image_data)
+
+    print("Pre-removal:", len(image_collector))
+    print("Shape of image_collector:", np.shape(image_collector))
+
+    # Remove the specified extensions
+    image_collector = np.delete(image_collector, indices_to_remove, axis=0)
+
+    print("Post-removal:", len(image_collector))
+
+    # Compute the average of the remaining images
+    average_image = np.mean(image_collector, axis=0)
+
+    # Get original headers
+    hdul_original = fits.open(path_files)
+    primary_hdr = hdul_original[0].header.copy() # copy the primary header
+    image_hdr = hdul_original[1].header.copy() # copy the image header
+    hdul_original.close()
+
+    # Save the average as a new FITS file, keeping the headers
+    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
+    image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
+    hdu = fits.HDUList([primary_hdu, image_hdu])
+
+    hdu.writeto(output_file, overwrite=True)
+    print(f"Combined image saved in : {output_file}")
+    # Display the average image using show_fits_image
+    show_fits_image(output_file, index=1, cmap="gray")
+    return hdu
     
 def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min_points=5):
     """
-    Grafica V(M1' - M1) vs M1 + M1' para una extensión específica del MAS-CCD Skipper y muestra el ROI.
-    Guarda las figuras generadas en el mismo directorio que los archivos FITS.
+    Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling 
+    and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit.
+
+    Args:
+        path_files (list of str): List of FITS file paths to be processed. Each exposure time must have at least two files.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
+        extension_number (int): Index of the FITS extension (amplifier) to be analyzed.
+        min_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+
+    Returns:
+        list of float: A list containing the computed gain value [e⁻/ADU] for the specified extension.
+
+    Raises:
+        None explicitly, but skips extensions or images with invalid data.
+
+    Notes:
+        - For each exposure time, the function uses the first two FITS files to compute the variance of the pixel difference 
+          and the sum of the mean counts in the ROI.
+        - A linear regression is performed on variance vs. mean-sum to estimate the inverse gain (1/slope).
+        - Generates and saves two diagnostic plots in the same directory as the FITS files:
+            1. Side-by-side display of all ROIs used.
+            2. Gain fitting curve (Variance vs. Mean-sum).
+        - ROI plots are saved as: `gain_<basename>_ext<extension>_rois.png`
+        - Gain plots are saved as: `gain_<basename>_ext<extension>_gainplot.png`
+        - Requires the helper function `best_gain_fit()` to work properly.
     """
     gains = {}
     exposure_times = defaultdict(list)
@@ -180,13 +356,12 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
         # Guardar ROI plot
         roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
         roi_dir = os.path.dirname(path_files[0])
-        fig_rois_path = os.path.join(roi_dir, f"{roi_base}_ext{extension_number}_rois.png")
+        fig_rois_path = os.path.join(roi_dir, f"gain_{roi_base}_ext{extension_number}_rois.png")
         fig_rois.savefig(fig_rois_path)
         print(f"Saved ROI plot to {fig_rois_path}")
-        #plt.close(fig_rois)
 
     if len(extension_variances) < 4:
-        print(f"No suficientes puntos para la extensión {extension_number}")
+        print(f"Not enough points for the extension {extension_number}")
         return None
 
     extension_variances = np.array(extension_variances)
@@ -194,7 +369,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
 
     slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
     if slope is None:
-        print(f"No se pudo realizar el ajuste para la extensión {extension_number}")
+        print(f"Not enough points for the extension  {extension_number}")
         return None
 
     gains[extension_number] = 1 / slope
@@ -214,22 +389,44 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     # Guardar plot de ganancia
     gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
     gain_dir = os.path.dirname(path_files[0])
-    fig_gain_path = os.path.join(gain_dir, f"{gain_base}_ext{extension_number}_gainplot.png")
+    fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
     fig_gain.savefig(fig_gain_path)
     print(f"Saved gain plot to {fig_gain_path}")
-    #plt.close(fig_gain)
 
     return list(gains.values())
 
 def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, min_points=5, threshold=0.01):
     """
-    Grafica Tiempo de exposición vs Cuentas promedio para una extensión específica del MAS-CCD Skipper,
-    muestra el ROI, realiza un ajuste lineal y encuentra el full well.
+    Estimates the full-well capacity of a MAS-CCD Skipper extension using dynamic ROI selection.
+    The method fits a linear model to the mean counts versus exposure time and detects deviation 
+    beyond a given residual threshold to define the full-well limit.
 
-    NOTA: ROI DINÁMICO
+    Args:
+        path_files (list of str): List of FITS file paths grouped by exposure time. Each group must contain at least two images.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end]
+        extension_number (int): FITS extension number to analyze (corresponding to a specific amplifier).
+        min_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        threshold (float, optional): Maximum allowed fractional residual from the linear model before identifying the full-well limit. 
+        Defaults to 0.01 (1%).
+
+    Returns:
+        tuple:
+            float: Estimated full-well value (in ADU) where non-linearity exceeds the threshold.
+            list: List of mean counts from all exposure pairs in the ROI.
+
+    Notes:
+        - For each exposure time, only the first two files are used to compute average ROI counts.
+        - A linear fit is performed to the average counts versus exposure time.
+        - The full-well is defined as the first point where the relative residual exceeds the threshold.
+        - Saves the following plots:
+            - ROI comparison: `fw_<basename>_ext<extension>_rois.png`
+            - Full-well fitting: `fw_<basename>_ext<extension>_fullwell.png`
+        - Requires `best_gain_fit()` to perform the progressive linear fit.
+        - ROI and gain plots are saved in the same directory as the input FITS files.
     """
+
     exposure_times = defaultdict(list)
-    all_rois = []  # List to store all ROIs
+    all_rois = []
     extension_exptimes = []
     extension_means = []
 
@@ -245,7 +442,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
     for exptime in exposure_time_keys:
         files = exposure_times[exptime]
         if len(files) >= 2:
-            file1, file2 = files[:2]  # Take the first two files
+            file1, file2 = files[:2]
             with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
                 if extension_number >= len(hdul1) or extension_number >= len(hdul2):
                     continue
@@ -262,50 +459,53 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
                     extension_means.append(mean_data)
                     all_rois.append((data1_roi, data2_roi, file1, file2))
 
-    # Create a single figure for all ROIs
-    num_rois = len(all_rois)
-    if num_rois > 0:
-        rows = 6
-        cols = 4
+    # ---- PLOT ROIs ----
+    if len(all_rois) > 0:
+        rows, cols = 6, 4
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
         for i, (data1_roi, data2_roi, file1, file2) in enumerate(all_rois):
-            zscale1 = ZScaleInterval()
-            zlow1, zhigh1 = zscale1.get_limits(data1_roi)
-            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start]) #Set extent
-            axes[2*i].invert_yaxis() #Invert Y axis
+            zlow1, zhigh1 = ZScaleInterval().get_limits(data1_roi)
+            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i].invert_yaxis()
             contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
             exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
             axes[2*i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
-            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8, verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color ="red")
+            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8,
+                           verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
 
-            zscale2 = ZScaleInterval()
-            zlow2, zhigh2 = zscale2.get_limits(data2_roi)
-            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start]) #Set extent
-            axes[2*i+1].invert_yaxis() #Invert Y axis
+            zlow2, zhigh2 = ZScaleInterval().get_limits(data2_roi)
+            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i+1].invert_yaxis()
             contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
             exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
             axes[2*i+1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
-            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8, verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8,
+                             verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
 
         fig_rois.tight_layout()
-        fig_rois.show()
+
+        # Guardar imagen
+        base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
+        output_dir = os.path.dirname(path_files[0])
+        fig_rois_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_rois.png")
+        fig_rois.savefig(fig_rois_path)
+        print(f"Saved ROI plot to {fig_rois_path}")
 
     if len(extension_exptimes) < 4:
-        print(f"No suficientes puntos para la extensión {extension_number}")
-        #plt.close()
+        print(f"Not enough points for the extension {extension_number}")
         return None
 
-    # Fit Lineal y Full Well
-    slope, intercept, good_exptimes, good_means, _ = best_gain_fit(np.array(extension_exptimes), np.array(extension_means), min_points)
+    # ---- PLOT FULL WELL ----
+    slope, intercept, good_exptimes, good_means, _ = best_gain_fit(
+        np.array(extension_exptimes), np.array(extension_means), min_points)
 
     if slope is None:
         return None
 
     fit_line = np.polyval([slope, intercept], good_exptimes)
     residuals = np.abs(good_means - fit_line) / good_means
-
     full_well_index = np.where(residuals > threshold)[0][0] if np.any(residuals > threshold) else len(good_exptimes) - 1
     full_well = good_means[full_well_index]
 
@@ -313,25 +513,45 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
     ax_counts.plot(extension_exptimes, extension_means, 'o', label=f'Ext {extension_number}', color="red", markersize=5)
     ax_counts.plot(good_exptimes, fit_line, 'b--', label='Ajuste Lineal')
     ax_counts.axvline(x=good_exptimes[full_well_index], color='g', linestyle='--', label='Full Well')
-
     ax_counts.set_title(f"Extensión {extension_number}")
     ax_counts.set_xlabel("Tiempo de Exposición (EXPTIME)")
     ax_counts.set_ylabel("Media de cuentas")
     ax_counts.grid()
     ax_counts.legend()
     fig_counts.tight_layout()
-    fig_counts.show()
+
+    # Guardar imagen
+    fig_fullwell_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_fullwell.png")
+    fig_counts.savefig(fig_fullwell_path)
+    print(f"Saved Full Well plot to {fig_fullwell_path}")
 
     return full_well, extension_means
 
 def visualize_roi__mean_variance(file_path, roi, extension_number):
     """
-    Visualiza un ROI en una imagen FITS y muestra la media de las cuentas dentro del ROI.
+    Displays a region of interest (ROI) from a FITS image and computes its mean and standard deviation.
+
+    This function extracts a rectangular ROI from a given extension in a FITS file, displays it using
+    a ZScale stretch, and prints the mean and standard deviation of the pixel values within the ROI.
 
     Args:
-        file_path (str): Ruta al archivo FITS.
-        roi (tuple): Región de interés (ROI) como (x_start, x_end, y_start, y_end).
-        extension_number (int): Número de extensión del archivo FITS a utilizar.
+        file_path (str): Path to the input FITS file.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
+        extension_number (int): Index of the FITS extension to access.
+
+    Returns:
+        tuple:
+            float: Mean pixel value within the ROI.
+            float: Standard deviation of pixel values within the ROI.
+
+    Raises:
+        FileNotFoundError: If the specified FITS file cannot be found.
+        Exception: For any other unexpected error.
+
+    Notes:
+        - The ROI image is displayed using `matplotlib` with intensity scaling based on ZScale.
+        - The Y-axis is flipped to follow astronomical image convention.
+        - Pixel statistics are printed in the figure title for quick interpretation.
     """
     try:
         with fits.open(file_path) as hdul:
@@ -362,177 +582,39 @@ def visualize_roi__mean_variance(file_path, roi, extension_number):
     except Exception as e:
         print(f"Ocurrió un error: {e}")
     return mean_counts, std_counts
-
-
-def show_multi_fits_image(filename):
-    """
-    Displays all data-containing extensions of a FITS file.
-
-    Args:
-        filename (str): The path to the FITS file.
-
-    Returns:
-        None
-
-    Example:
-        >>> show_multi_fits_image("example.fits")
-
-    Notes:
-        - This function iterates over all extensions in the FITS file and uses 
-          `show_fits_image` to display the extensions that contain valid data.
-        - If an extension does not contain data, it is skipped with a message logged 
-          to the console.
-    """
-    with fits.open(filename) as hdulist:
-        print(f"Displaying file: {filename}")
-        # Iterate over all extensions
-        for i, hdu in enumerate(hdulist):
-            if hdu.data is not None:
-                print(f"  Extension {i}: Data shape = {hdu.data.shape}")
-                # Example: Show the image for this extension
-                show_fits_image(filename, index=i, cmap='gray')
-
-def combine_fits_extensions(path_files, extensions, output_file, method='mean'):
-    """
-    Combine mltiples extensiones dentro de un solo archivo FITS.
-
-    Args:
-        path_files (str): Ruta del archivo FITS de entrada.
-        extensions (list): Lista de índices de extensiones a combinar.
-        output_file (str): Nombre del archivo FITS de salida.
-        method (str): Método de combinación ('mean', 'median', 'sum').
-
-    Returns:
-        None
-    Note: This cannot handle lists. A for loop is needed to use it.
-    """
-    with fits.open(path_files) as hdul:
-        if max(extensions) >= len(hdul):
-            raise ValueError("Una de las extensiones seleccionadas no existe en el archivo FITS.")
-
-        images = []
-
-        for ext in extensions:
-            if hdul[ext].data is not None:
-                images.append(hdul[ext].data)
-            else:
-                print(f"Advertencia: La extensión {ext} no contiene datos y será omitida.")
-
-        if not images:
-            raise ValueError("No se encontraron datos en las extensiones seleccionadas.")
-
-        if method == 'mean':
-            combined_data = np.mean(images, axis=0)
-        elif method == 'median':
-            combined_data = np.median(images, axis=0)
-        elif method == 'sum':
-            combined_data = np.sum(images, axis=0)
-        else:
-            raise ValueError("Método no válido. Usa 'mean', 'median' o 'sum'.")
-
-        combined_hdul = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data=combined_data)])
-
-        combined_hdul.writeto(output_file, overwrite=True)
-        print(f"Imagen combinada guardada en: {output_file}")
-        # Visualizar la imagen combinada (usa tu función para mostrar FITS)
-        show_fits_image(output_file, index=1, cmap='gray')
-
-def combine_fits_extensions_shifted(path_files, output_file):
-    """
-    Loads, processes, and combines the specified extensions from a FITS file,
-    removes specified extensions, averages the remaining images, and saves and displays the result.
-
-    Args:
-        path_files (str): Path to the input FITS file.
-        output_file (str): Name of the output FITS file to save.
-
-    Returns:
-        hdu
-    Note: This cannot handle lists. A for loop is needed to use it.
-    """
-    # Define the order of extensions
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
-    cut_size = 512
-    gap = 15
-
-    # Get prescan, overscan (biassec) and NCOL from the FITS header
-    hdul = fits.open(path_files)
-    hdr = hdul[1].header  # Assuming the trimsec and biassec are in the first extension header
-    trimsec = hdr['TRIMSEC']
-    biassec = hdr['BIASSEC']
-
-    trimsec_list = list(map(int, trimsec.strip("[]").replace(",", ":").split(":")))
-    prescan = trimsec_list[0]
-
-    biassec_list = list(map(int, biassec.strip("[]").replace(",", ":").split(":")))
-    overscan = biassec_list[1] - biassec_list[0] #Calculate the width of the overscan.
-
-    ncol = int(hdul[2].header['NCOL'])
-    pad_right = ncol - cut_size
-
-    hdul.close()
-
-    # Collect the processed images
-    image_collector = []
-
-    # Load and process the images
-    for i, ext in enumerate(extensions):
-        image_data = fits.getdata(path_files, i + 1)
-        image_data = image_data[:, (gap * (ext - 1)):(gap * (ext - 1)) + cut_size + prescan + overscan]
-        image_data = np.pad(image_data, ((0, 0), (0, pad_right - prescan - overscan)), mode='constant', constant_values=0)
-        image_collector.append(image_data)
-
-    print("Pre-removal:", len(image_collector))
-    print("Shape of image_collector:", np.shape(image_collector))
-
-    # Indices of the extensions to remove
-    indices_to_remove = [7, 10, 14]  # Modify these indices as needed
-
-    # Remove the specified extensions
-    image_collector = np.delete(image_collector, indices_to_remove, axis=0)
-
-    print("Post-removal:", len(image_collector))
-
-    # Compute the average of the remaining images
-    average_image = np.mean(image_collector, axis=0)
-
-    # Get original headers
-    hdul_original = fits.open(path_files)
-    primary_hdr = hdul_original[0].header.copy() # copy the primary header
-    image_hdr = hdul_original[1].header.copy() # copy the image header
-    hdul_original.close()
-
-    # Save the average as a new FITS file, keeping the headers
-    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
-    image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
-    hdu = fits.HDUList([primary_hdu, image_hdu])
-
-    hdu.writeto(output_file, overwrite=True)
-    print(f"Combined image saved in : {output_file}")
-    # Display the average image using show_fits_image
-    show_fits_image(output_file, index=1, cmap="gray")
-    return hdu
     
 def overscan_correction(path_files, output_file, method='mean'):
     """
     Applies overscan correction to all 16 extensions in a FITS file.
 
+    This function reads a multi-extension FITS file, calculates the overscan level in each extension,
+    and subtracts it to correct for electronic bias. The corrected image is saved to a new FITS file.
+
     Args:
         path_files (str): Path to the input FITS file.
         output_file (str): Path to save the corrected FITS file.
-        method (str): 'mean' for simple subtraction, 'poly' for polynomial fitting.
+        method (str, optional): Overscan subtraction method.
+            - 'mean': Use the mean value of the overscan region.
+            - 'poly': Fit a 2nd-degree polynomial to the overscan region (column-wise).
 
     Returns:
         None
-    """
 
+    Raises:
+        ValueError: If an invalid method is provided.
+
+    Notes:
+        - The overscan region is inferred from the 'BIASSEC' keyword in the FITS header.
+        - The function assumes the file contains 16 image extensions.
+        - Extensions with missing data will be skipped.
+    """
     # Get overscan (biassec) from the FITS header
     hdul = fits.open(path_files)
     hdr = hdul[1].header  # Assuming the trimsec and biassec are in the first extension header
     biassec = hdr['BIASSEC']
     biassec_list = list(map(int, biassec.strip("[]").replace(",", ":").split(":")))
     overscan_width = biassec_list[1] - biassec_list[0]  # Calculate the width of the overscan.
-    print(f"overscan_width: {overscan_width}")
+    print(f"Overscan width: {overscan_width}")
     hdul.close()
 
     with fits.open(path_files, mode='readonly') as hdul:
@@ -541,40 +623,41 @@ def overscan_correction(path_files, output_file, method='mean'):
 
         for ext in range(1, 17):  # Iterate through the 16 extensions
             if ext >= len(hdul) or hdul[ext].data is None:
-                print(f"⚠️ Warning: Extension {ext} does not exist or has no data.")
+                print(f"Warning: Extension {ext} does not exist or has no data.")
                 continue
 
             data = hdul[ext].data.astype(float)  # Convert to float for precision
             overscan_region = data[:, -overscan_width:]  # Last `overscan_width` pixels
 
             if method == 'mean':
-                overscan_value = np.mean(overscan_region)  # Calculate mean overscan level
+                overscan_value = np.mean(overscan_region)
             elif method == 'poly':
-                # Fit a polynomial across the overscan region (1D polynomial)
                 x = np.arange(overscan_region.shape[1])
                 y = np.mean(overscan_region, axis=0)
-                poly_coeffs = np.polyfit(x, y, deg=2)  # 2nd-degree polynomial
+                poly_coeffs = np.polyfit(x, y, deg=2)
                 poly_fit = np.polyval(poly_coeffs, x)
                 overscan_value = np.mean(poly_fit)
             else:
-                raise ValueError("❌ Invalid method. Use 'mean' or 'poly'.")
+                raise ValueError("Invalid method. Use 'mean' or 'poly'.")
 
-            print(f"Overscan mean pre correction: {overscan_value}")
-            corrected_data = data - overscan_value  # Subtract overscan
-            area_post = corrected_data[:, -overscan_width:]
-            print(f"Overscan mean post correction: {np.mean(area_post)}")
+            print(f"Overscan mean before correction (ext {ext}): {overscan_value}")
+            corrected_data = data - overscan_value
+            post_region = corrected_data[:, -overscan_width:]
+            print(f"Overscan mean after correction (ext {ext}): {np.mean(post_region)}")
 
-            # Create a new FITS extension
             corrected_hdu = fits.ImageHDU(data=corrected_data, header=hdul[ext].header)
             corrected_hdul.append(corrected_hdu)
 
-        # Save the corrected FITS file
         corrected_hdul.writeto(output_file, overwrite=True)
         print(f"Overscan-corrected FITS saved as: {output_file}")
+
 
 def bias_subtraction(path_files, master_bias_file, output_file):
     """
     Applies bias subtraction to all 16 extensions in a FITS file.
+
+    This function reads a science FITS file and subtracts the corresponding extensions
+    of a master bias file to remove the electronic bias pattern from each image extension.
 
     Args:
         path_files (str): Path to the input FITS file (science image).
@@ -583,6 +666,14 @@ def bias_subtraction(path_files, master_bias_file, output_file):
 
     Returns:
         None
+
+    Raises:
+        ValueError: If the input files have mismatched extensions or data is missing.
+
+    Notes:
+        - Assumes that both the science and master bias files contain 16 image extensions.
+        - Skips any extension that is missing or contains no data in either file.
+        - Preserves original headers in each extension.
     """
     with fits.open(path_files, mode='readonly') as sci_hdul, fits.open(master_bias_file, mode='readonly') as bias_hdul:
         # Copy the original primary header
@@ -752,8 +843,6 @@ def plot_variance_vs_sum(path_files, roi):
     plt.tight_layout()
     plt.show()
 
-
-    
 def plot_exposure_time_vs_mean(path_files, roi=None):
     """
     Grafica el tiempo de exposición (EXPTIME) vs la media para cada una de las 16 extensiones del MAS-CCD Skipper.
@@ -839,36 +928,6 @@ def plot_exposure_time_vs_mean(path_files, roi=None):
     plt.show()
     return all_extension_means
     
-# def linear_reg_param(x, y):
-#     """
-#     Fits a linear regression model and calculates residuals, slope, intercept, and RMSE.
-
-#     Args:
-#         x (array-like): Independent variable values (1D array).
-#         y (array-like): Dependent variable values (1D array).
-
-#     Returns:
-#         - 'residuals' (numpy.ndarray): The residuals of the fit (y - y_pred).
-#         - 'slope' (float): The slope of the fitted line.
-#         - 'intercept' (float): The intercept of the fitted line.
-#         - 'rmse' (float): The root mean squared error of the fit.
-#     """
-#     x = np.array(x).reshape(-1, 1)
-#     y = np.array(y).reshape(-1, 1)
-
-#     model = LinearRegression()
-#     model.fit(x, y)
-
-#     y_pred = model.predict(x)
-#     residuals = y - y_pred
-#     # RMSE
-#     rmse = np.sqrt(mean_squared_error(y, y_pred))
-
-#     # Retrieve slope and intercept
-#     slope = model.coef_[0][0]
-#     intercept = model.intercept_[0]
-#     return residuals, slope, intercept, rmse
-
 def best_gain_fit(x, y, min_points=5):
     """
     Encuentra el mejor ajuste lineal eliminando outliers usando el criterio de menor MSE.
@@ -909,263 +968,6 @@ def best_gain_fit(x, y, min_points=5):
     y_best = y[list(best_indices)]
 
     return slope, intercept, x_best, y_best, best_indices
-
-def new_gain(path_files, roi, min_points=5): 
-    """
-    Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
-
-    NOTA: EL ROI ES FIJO. ESTOY USANDO UN ROI COMÜN PARA LAS 16 EXTENSIONES QUE ES DENTRO DE 260,440 EN X*
-    """
-    gains = {}
-    exposure_times = defaultdict(list)
-    for file_path in path_files:
-        with fits.open(file_path) as hdulist:
-            exptime = hdulist[0].header.get('EXPTIME', None)
-            if exptime is None:
-                continue
-            exposure_times[exptime].append(file_path)
-
-    # Obtener el número de extensiones del primer archivo FITS
-    with fits.open(path_files[0]) as hdulist:
-        num_extensions = len(hdulist) - 1  # Restar 1 para excluir la extensión principal
-
-    ext_side = int(np.sqrt(num_extensions))
-    fig, axes = plt.subplots(ext_side, ext_side, figsize=(12, 12))
-    fig.suptitle("V(M1' - M1) vs M1 + M1' para el MAS-CCD Skipper", fontsize=14)
-
-    # Encontrar el valor máximo de sum_of_means para todas las extensiones
-    max_y_value = 0
-    all_extension_sum_of_means = []
-    
-    for ext in range(1, num_extensions + 1):
-        extension_variances = []
-        extension_sum_of_means = []
-        exposure_time_keys = sorted(exposure_times.keys())
-
-        for exptime in exposure_time_keys:
-            if len(exposure_times[exptime]) == 2:
-                file1, file2 = exposure_times[exptime]
-                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
-                    if ext >= len(hdul1) or ext >= len(hdul2):
-                        continue
-                    data1 = hdul1[ext].data
-                    data2 = hdul2[ext].data
-                    if data1 is None or data2 is None:
-                        continue
-                    if roi:
-                        x_start, x_end, y_start, y_end = roi
-                        data1 = data1[y_start:y_end, x_start:x_end]
-                        data2 = data2[y_start:y_end, x_start:x_end]
-                    diff_data = data2 - data1
-                    variance = np.var(diff_data)
-                    sum_of_mean = np.mean(data2) + np.mean(data1)
-                    if np.isnan(variance) or np.isnan(sum_of_mean):
-                        continue
-                    extension_variances.append(variance)
-                    extension_sum_of_means.append(sum_of_mean)
-
-        if len(extension_variances) < 4:
-            continue
-
-        extension_variances = np.array(extension_variances)
-        extension_sum_of_means = np.array(extension_sum_of_means)
-        all_extension_sum_of_means.extend(extension_sum_of_means)
-
-        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
-        if slope is None:
-            continue
-
-        gains[ext] = 1 / slope
-
-    max_y_value = max(all_extension_sum_of_means)
-    
-    for ext in range(1, num_extensions + 1):
-        row, col = (ext - 1) // ext_side, (ext - 1) % ext_side
-        ax = axes[row, col]
-        extension_variances = []
-        extension_sum_of_means = []
-        exposure_time_keys = sorted(exposure_times.keys())
-
-        for exptime in exposure_time_keys:
-            if len(exposure_times[exptime]) == 2:
-                file1, file2 = exposure_times[exptime]
-                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
-                    if ext >= len(hdul1) or ext >= len(hdul2):
-                        continue
-                    data1 = hdul1[ext].data
-                    data2 = hdul2[ext].data
-                    if data1 is None or data2 is None:
-                        continue
-                    if roi:
-                        x_start, x_end, y_start, y_end = roi
-                        data1 = data1[y_start:y_end, x_start:x_end]
-                        data2 = data2[y_start:y_end, x_start:x_end]
-                    diff_data = data2 - data1
-                    variance = np.var(diff_data)
-                    sum_of_mean = np.mean(data2) + np.mean(data1)
-                    if np.isnan(variance) or np.isnan(sum_of_mean):
-                        continue
-                    extension_variances.append(variance)
-                    extension_sum_of_means.append(sum_of_mean)
-
-        if len(extension_variances) < 4:
-            continue
-
-        extension_variances = np.array(extension_variances)
-        extension_sum_of_means = np.array(extension_sum_of_means)
-
-        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
-        if slope is None:
-            continue
-
-        gains[ext] = 1 / slope
-        ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext}', color="blue", markersize=5)
-        fit_line = np.polyval([slope, intercept], extension_variances)
-        ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
-        gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
-        ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
-        ax.set_title(f"Extensión {ext}")
-        ax.set_xlabel("Varianza de la diferencia")
-        ax.set_ylabel("Suma de Medias")
-        ax.grid()
-        ax.set_ylim(0, max_y_value*1.1)
-
-    plt.tight_layout()
-    plt.show()
-    gains = list(gains.values())
-    return gains
-    
-def calculate_gain_simple(path_files, roi, max_slope_diff=0.5):
-    """
-    Calcula la ganancia para cada extensión del MAS-CCD Skipper.
-    Calcula las pendientes entre puntos consecutivos y luego hace la media.
-    Descarta puntos donde la pendiente difiere demasiado.
-
-    Args:
-        path_files (list of str): Lista de archivos FITS en pares con el mismo tiempo de exposición.
-        roi (tuple): Región de interés (x_start, x_end, y_start, y_end).
-        max_slope_diff (float): Máxima diferencia permitida entre pendientes consecutivas.
-
-    Returns:
-        dict: Diccionario con la ganancia estimada para cada extensión.
-    """
-    gains = {}
-
-    # Organizar imágenes por tiempo de exposición
-    exposure_times = defaultdict(list)
-    for file_path in path_files:
-        with fits.open(file_path) as hdulist:
-            exptime = hdulist[0].header.get('EXPTIME', None)
-            if exptime is None:
-                print(f"⚠️ EXPTIME no encontrado en {file_path}")
-                continue
-            exposure_times[exptime].append(file_path)
-
-    # Obtener el número de extensiones del primer archivo FITS
-    with fits.open(path_files[0]) as hdulist:
-        num_extensions = len(hdulist) - 1  # Restar 1 para excluir la extensión principal
-
-    # Crear figura con subplots (4x4) para visualizar cada extensión
-    fig, axes = plt.subplots(4, 4, figsize=(12, 12))
-    fig.suptitle("Cálculo de Ganancia para el MAS-CCD Skipper", fontsize=16)
-
-    # Iterar sobre cada extensión (1 a num_extensions)
-    for ext in range(1, num_extensions + 1):
-        row, col = (ext - 1) // 4, (ext - 1) % 4
-        ax = axes[row, col]
-
-        # Listas para almacenar varianza y suma de medias
-        extension_variances = []
-        extension_sum_of_means = []
-
-        # Ordenar los tiempos de exposición
-        exposure_time_keys = sorted(exposure_times.keys())
-
-        # Procesar pares de imágenes con el mismo tiempo de exposición
-        for exptime in exposure_time_keys:
-            if len(exposure_times[exptime]) == 2:
-                file1, file2 = exposure_times[exptime]
-
-                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
-                    if ext >= len(hdul1) or ext >= len(hdul2):
-                        print(f" Extensión {ext} no disponible en {file1} o {file2}")
-                        continue
-
-                    data1 = hdul1[ext].data
-                    data2 = hdul2[ext].data
-
-                    # Apply ROI selection
-                    if roi:
-                        x_start, x_end, y_start, y_end = roi
-                        data1 = data1[y_start:y_end, x_start:x_end]
-                        data2 = data2[y_start:y_end, x_start:x_end]
-
-                    if data1 is None or data2 is None:
-                        continue
-
-                    # Calcular varianza de la diferencia y suma de medias
-                    diff_data = data1 - data2
-                    variance = np.var(diff_data)
-                    sum_of_mean = np.mean(data1) + np.mean(data2)
-
-                    # Evitar valores atípicos o NaN
-                    if np.isnan(variance) or np.isnan(sum_of_mean):
-                        continue
-
-                    extension_variances.append(variance)
-                    extension_sum_of_means.append(sum_of_mean)
-
-        # Asegurar que hay suficientes puntos para calcular pendientes
-        if len(extension_variances) < 2:
-            print(f" No hay suficientes datos para calcular la ganancia en la extensión {ext}.")
-            continue
-
-        # Calcular pendientes entre puntos consecutivos
-        slopes = []
-        for i in range(len(extension_variances) - 1):
-            slope = (extension_sum_of_means[i+1] - extension_sum_of_means[i]) / (extension_variances[i+1] - extension_variances[i])
-            slopes.append(slope)
-
-        # Filtrar pendientes atípicas
-        filtered_slopes = []
-        if slopes:
-            filtered_slopes.append(slopes[0])  # Añadir la primera pendiente siempre
-            for i in range(1, len(slopes)):
-                if abs(slopes[i] - filtered_slopes[-1]) <= max_slope_diff:
-                    filtered_slopes.append(slopes[i])
-
-        # Calcular ganancia promedio
-        if filtered_slopes:
-            avg_slope = np.mean(filtered_slopes)
-            gains[ext] = 1 / avg_slope
-        else:
-            print(f" No se pudieron calcular pendientes válidas para la extensión {ext}.")
-            gains[ext] = np.nan
-
-        # Graficar los datos
-        ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext} Data', color="blue")
-
-        # Graficar la línea de ganancia promedio
-        if filtered_slopes:
-            fit_line = np.polyval([avg_slope, 0], extension_variances)
-            ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={1/avg_slope:.3f})')
-
-            # Anotar la ganancia en el gráfico
-            gain_text = f"Gain: {1 / avg_slope:.3f} e-/ADU"
-            ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
-        else:
-            ax.text(0.05, 0.95, "Gain: N/A", transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
-
-        ax.set_title(f"Extensión {ext}")
-        ax.set_xlabel("Varianza (ADU²)")
-        ax.set_ylabel("Suma de Medias (ADU)")
-        ax.grid()
-
-    # Ajustar diseño y mostrar
-    plt.tight_layout()
-    plt.show()
-
-    return gains
 
 def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, min_points=5):
     """
