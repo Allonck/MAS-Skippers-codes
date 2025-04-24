@@ -1104,8 +1104,6 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-    # agregar de argumento un array para dividir cada fila entre la ganancia 
-    # que en el full well, se imprima el full well en pantalla y que me devuelva los residuos.
 def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
     """
     Computes readout noise from bias FITS files, saves it to a file, and plots the result.
@@ -1157,7 +1155,6 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
         except Exception as e:
             print(f"Error writing to file: {e}")
             return
-
 
 def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     """
@@ -1375,3 +1372,309 @@ def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_indiv
         print(f"Saved 4x4 gain figure to: {plot_path}")
 
     return gains
+
+#########################
+    #########################
+###################################################
+    # for path_file in path_files_m:
+    #     rd_noise_all = []
+    #     for idx, ext in enumerate(extensions):
+    #         print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
+    #         roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
+    #         try:
+    #             # Assuming visualize_roi__mean_variance is defined elsewhere and works correctly
+    #             _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+    #         except Exception as e:
+    #             print(f"Error processing file {path_file}, extension {ext}: {e}")
+    #             rd_noise = np.nan  # Or some other appropriate error value
+    #         if gain is not None:
+    #             rd_noise = rd_noise / gain[idx]  # Corrected indexing
+    #         rd_noise_all.append(rd_noise)
+###################################################
+    #########################
+#########################
+def new_gain(path_files, roi, min_points=5): 
+    """
+    Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
+    NOTA: EL ROI ES FIJO. ESTOY USANDO UN ROI COMÜN PARA LAS 16 EXTENSIONES QUE ES DENTRO DE 260,440 EN X*
+    """
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    
+    gains = {}
+    exposure_times = defaultdict(list)
+    for file_path in path_files:
+        with fits.open(file_path) as hdulist:
+            exptime = hdulist[0].header.get('EXPTIME', None)
+            if exptime is None:
+                continue
+            exposure_times[exptime].append(file_path)
+
+    # Obtener el número de extensiones del primer archivo FITS
+    with fits.open(path_files[0]) as hdulist:
+        num_extensions = len(hdulist) - 1  # Restar 1 para excluir la extensión principal
+
+    ext_side = int(np.sqrt(num_extensions))
+    fig, axes = plt.subplots(ext_side, ext_side, figsize=(12, 12))
+    fig.suptitle("V(M1' - M1) vs M1 + M1' para el MAS-CCD Skipper", fontsize=14)
+
+    # Encontrar el valor máximo de sum_of_means para todas las extensiones
+    max_y_value = 0
+    all_extension_sum_of_means = []
+
+    for ext in range(1, num_extensions + 1):
+        extension_variances = []
+        extension_sum_of_means = []
+        exposure_time_keys = sorted(exposure_times.keys())
+
+        for exptime in exposure_time_keys:
+            if len(exposure_times[exptime]) == 2:
+                file1, file2 = exposure_times[exptime]
+                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                    if ext >= len(hdul1) or ext >= len(hdul2):
+                        continue
+                    data1 = hdul1[ext].data
+                    data2 = hdul2[ext].data
+                    if data1 is None or data2 is None:
+                        continue
+                    if roi:
+                        x_start, x_end, y_start, y_end = roi
+                        print(f"x_start: {x_start},x_end: {x_end}, y_start: {y_start}, y_end: {y_end}")
+                        data1 = data1[y_start:y_end, x_start:x_end]
+                        data2 = data2[y_start:y_end, x_start:x_end]
+                    diff_data = data2 - data1
+                    variance = np.var(diff_data)
+                    sum_of_mean = np.mean(data2) + np.mean(data1)
+                    if np.isnan(variance) or np.isnan(sum_of_mean):
+                        continue
+                    extension_variances.append(variance)
+                    extension_sum_of_means.append(sum_of_mean)
+
+        if len(extension_variances) < 4:
+            continue
+
+        extension_variances = np.array(extension_variances)
+        extension_sum_of_means = np.array(extension_sum_of_means)
+        all_extension_sum_of_means.extend(extension_sum_of_means)
+
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
+        if slope is None:
+            continue
+
+        gains[ext] = 1 / slope
+
+    max_y_value = max(all_extension_sum_of_means)
+
+    for ext in range(1, num_extensions + 1):
+        row, col = (ext - 1) // ext_side, (ext - 1) % ext_side
+        ax = axes[row, col]
+        extension_variances = []
+        extension_sum_of_means = []
+        exposure_time_keys = sorted(exposure_times.keys())
+
+        for exptime in exposure_time_keys:
+            if len(exposure_times[exptime]) == 2:
+                file1, file2 = exposure_times[exptime]
+                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                    if ext >= len(hdul1) or ext >= len(hdul2):
+                        continue
+                    data1 = hdul1[ext].data
+                    data2 = hdul2[ext].data
+                    if data1 is None or data2 is None:
+                        continue
+                    if roi:
+                        x_start, x_end, y_start, y_end = roi
+                        data1 = data1[y_start:y_end, x_start:x_end]
+                        data2 = data2[y_start:y_end, x_start:x_end]
+                    diff_data = data2 - data1
+                    variance = np.var(diff_data)
+                    sum_of_mean = np.mean(data2) + np.mean(data1)
+                    if np.isnan(variance) or np.isnan(sum_of_mean):
+                        continue
+                    extension_variances.append(variance)
+                    extension_sum_of_means.append(sum_of_mean)
+
+        if len(extension_variances) < 4:
+            continue
+
+        extension_variances = np.array(extension_variances)
+        extension_sum_of_means = np.array(extension_sum_of_means)
+
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
+        if slope is None:
+            continue
+
+        gains[ext] = 1 / slope
+        ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext}', color="blue", markersize=5)
+        fit_line = np.polyval([slope, intercept], extension_variances)
+        ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
+        gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
+        ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
+        ax.set_title(f"Extensión {ext}")
+        ax.set_xlabel("Varianza de la diferencia")
+        ax.set_ylabel("Suma de Medias")
+        ax.grid()
+        ax.set_ylim(0, max_y_value*1.1)
+
+    plt.tight_layout()
+    plt.show()
+    gains = list(gains.values())
+    return gains
+
+def new_gain_mod(path_files, roi=None, min_points=5):
+    """
+    Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
+    El ROI es dinámico y se ajusta para cada extensión.
+
+    Args:
+        path_files (list of str): Lista de rutas de archivos FITS.
+        roi (list, optional): ROI inicial definido como [x_start, x_end, y_start, y_end].
+                        Si es None, se utiliza un ROI inicial por defecto. El ROI se actualiza para cada extensión.
+        min_points (int, optional): Mínimo número de puntos válidos requeridos para realizar el ajuste lineal.
+                        Por defecto es 5.
+
+    Returns:
+        dict: Un diccionario donde las claves son los números de extensión (1-16) y los valores son las ganancias calculadas.
+    """
+    if roi is None:
+        roi = [545, 635, 540, 640]  # ROI inicial por defecto.
+
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    gains = {}
+    exposure_times = defaultdict(list)
+
+    for file_path in path_files:
+        with fits.open(file_path) as hdulist:
+            exptime = hdulist[0].header.get('EXPTIME', None)
+            if exptime is None:
+                continue
+            exposure_times[exptime].append(file_path)
+
+    # Obtener el número de extensiones del primer archivo FITS
+    with fits.open(path_files[0]) as hdulist:
+        num_extensions = len(hdulist) - 1  # Restar 1 para excluir la extensión principal
+
+    ext_side = int(np.sqrt(num_extensions))
+    fig, axes = plt.subplots(ext_side, ext_side, figsize=(12, 12))
+    fig.suptitle("V(M1' - M1) vs M1 + M1' para el MAS-CCD Skipper", fontsize=14)
+
+    # Encontrar el valor máximo de sum_of_means para todas las extensiones
+    max_y_value = 0
+    all_extension_sum_of_means = []
+
+    for idx, ext in enumerate(extensions):  # Iterar sobre las extensiones en el orden correcto
+        extension_variances = []
+        extension_sum_of_means = []
+        exposure_time_keys = sorted(exposure_times.keys())
+
+        # Calcular el ROI dinámico para cada extensión
+        x_start, x_end, y_start, y_end = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
+        roi = [x_start, x_end, y_start, y_end]
+
+        for exptime in exposure_time_keys:
+            if len(exposure_times[exptime]) == 2:
+                file1, file2 = exposure_times[exptime]
+                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                    if ext >= len(hdul1) or ext >= len(hdul2):
+                        continue
+                    data1 = hdul1[ext].data
+                    data2 = hdul2[ext].data
+                    if data1 is None or data2 is None:
+                        continue
+                    if roi:
+                        x_start, x_end, y_start, y_end = roi
+                        data1 = data1[y_start:y_end, x_start:x_end]
+                        data2 = data2[y_start:y_end, x_start:x_end]
+                    diff_data = data2 - data1
+                    variance = np.var(diff_data)
+                    sum_of_mean = np.mean(data2) + np.mean(data1)
+                    if np.isnan(variance) or np.isnan(sum_of_mean):
+                        continue
+                    extension_variances.append(variance)
+                    extension_sum_of_means.append(sum_of_mean)
+
+        if len(extension_variances) < 4:
+            continue
+
+        extension_variances = np.array(extension_variances)
+        extension_sum_of_means = np.array(extension_sum_of_means)
+        all_extension_sum_of_means.extend(extension_sum_of_means)
+
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means,
+                                                                      min_points)
+        if slope is None:
+            continue
+
+        gains[ext] = 1 / slope
+
+    max_y_value = max(all_extension_sum_of_means)
+
+    for idx, ext in enumerate(extensions):  # Iterar sobre las extensiones en el orden correcto
+        row, col = idx // ext_side, idx % ext_side # Usar idx para obtener la posición correcta
+        ax = axes[row, col]
+        extension_variances = []
+        extension_sum_of_means = []
+        exposure_time_keys = sorted(exposure_times.keys())
+        
+        # Calcular el ROI dinámico para cada extensión
+        x_start, x_end, y_start, y_end = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
+        roi = [x_start, x_end, y_start, y_end]
+
+        for exptime in exposure_time_keys:
+            if len(exposure_times[exptime]) == 2:
+                file1, file2 = exposure_times[exptime]
+                with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                    if ext >= len(hdul1) or ext >= len(hdul2):
+                        continue
+                    data1 = hdul1[ext].data
+                    data2 = hdul2[ext].data
+                    if data1 is None or data2 is None:
+                        continue
+                    if roi:
+                        x_start, x_end, y_start, y_end = roi
+                        data1 = data1[y_start:y_end, x_start:x_end]
+                        data2 = data2[y_start:y_end, x_start:x_end]
+                    diff_data = data2 - data1
+                    variance = np.var(diff_data)
+                    sum_of_mean = np.mean(data2) + np.mean(data1)
+                    if np.isnan(variance) or np.isnan(sum_of_mean):
+                        continue
+                    extension_variances.append(variance)
+                    extension_sum_of_means.append(sum_of_mean)
+
+        if len(extension_variances) < 4:
+            continue
+
+        extension_variances = np.array(extension_variances)
+        extension_sum_of_means = np.array(extension_sum_of_means)
+
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means,
+                                                                      min_points)
+        if slope is None:
+            continue
+
+        gains[ext] = 1 / slope
+        ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext}', color="blue", markersize=5)
+        fit_line = np.polyval([slope, intercept], extension_variances)
+        ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
+        gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
+        ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
+        ax.set_title(f"Extensión {ext}")
+        ax.set_xlabel("Varianza de la diferencia")
+        ax.set_ylabel("Suma de Medias")
+        ax.grid()
+        ax.set_ylim(0, max_y_value * 1.1)
+
+    plt.tight_layout()
+    plt.show()
+    gains_list = list(gains.values())
+    return gains_list
+
+def roi_shifting(roi):
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    shifted_roi = []
+    for idx,ext in enumerate(extensions):
+        x_start, x_end, y_start, y_end = [roi[0] + (15 * (ext - 1)), roi[1] + (15 * (ext - 1)), roi[2], roi[3]]  # Moving ROI
+        roi_shifted = [x_start, x_end, y_start, y_end]
+        shifted_roi.append(roi_shifted)
+    return shifted_roi
+
