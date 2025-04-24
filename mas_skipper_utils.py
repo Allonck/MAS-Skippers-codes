@@ -1162,3 +1162,76 @@ def save_and_plot_rdn(path_files_m, filename="rdn_test.txt", num_images_to_plot=
     plt.tight_layout()
     plt.show()
 
+def analyze_gain_all_extensions(path_files, roi_template, min_points=5):
+    """
+    Computes gain for all 16 extensions of a MAS-CCD Skipper image using variance-mean analysis.
+    Returns gain results and fit data for each extension. No ROI plots are saved.
+
+    Args:
+        path_files (list of str): List of FITS file paths to be processed.
+        roi_template (list of int): Base ROI in the format [x_start, x_end, y_start, y_end].
+        min_points (int): Minimum number of points required to perform the gain fit.
+
+    Returns:
+        dict: A dictionary where each key is the extension index (1-16), and the value is a dict:
+              {'gain': float, 'x': np.array, 'y': np.array, 'slope': float, 'intercept': float}
+    """
+    from collections import defaultdict
+    import numpy as np
+    from astropy.io import fits
+
+    results = {}
+    ext_order = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
+
+    for idx, ext in enumerate(ext_order):
+        extension_number = idx + 1
+        roi = [roi_template[0] + (15 * (ext - 1)),
+               roi_template[1] + (15 * (ext - 1)),
+               roi_template[2], roi_template[3]]
+
+        exposure_times = defaultdict(list)
+        extension_variances = []
+        extension_sum_of_means = []
+
+        for file_path in path_files:
+            with fits.open(file_path) as hdul:
+                exptime = hdul[0].header.get("EXPTIME", None)
+                if exptime is not None:
+                    exposure_times[exptime].append(file_path)
+
+        for exptime in sorted(exposure_times):
+            files = exposure_times[exptime]
+            if len(files) >= 2:
+                with fits.open(files[0]) as hdul1, fits.open(files[1]) as hdul2:
+                    if extension_number >= len(hdul1) or extension_number >= len(hdul2):
+                        continue
+                    data1 = hdul1[extension_number].data
+                    data2 = hdul2[extension_number].data
+                    if data1 is None or data2 is None:
+                        continue
+                    x1, x2, y1, y2 = roi
+                    diff_data = data2[y1:y2, x1:x2] - data1[y1:y2, x1:x2]
+                    variance = np.var(diff_data)
+                    mean_sum = np.mean(data1[y1:y2, x1:x2]) + np.mean(data2[y1:y2, x1:x2])
+                    if not (np.isnan(variance) or np.isnan(mean_sum)):
+                        extension_variances.append(variance)
+                        extension_sum_of_means.append(mean_sum)
+
+        if len(extension_variances) < min_points:
+            print(f"Extension {extension_number}: Not enough valid points")
+            continue
+
+        x = np.array(extension_variances)
+        y = np.array(extension_sum_of_means)
+        slope, intercept = np.polyfit(x, y, 1)
+        gain = 1 / slope
+
+        results[extension_number] = {
+            "gain": gain,
+            "x": x,
+            "y": y,
+            "slope": slope,
+            "intercept": intercept
+        }
+
+    return results
