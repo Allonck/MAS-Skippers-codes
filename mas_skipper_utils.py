@@ -1106,36 +1106,61 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
 
     # agregar de argumento un array para dividir cada fila entre la ganancia 
     # que en el full well, se imprima el full well en pantalla y que me devuelva los residuos.
-def save_readout_noise(path_files_m, filename="rdn_test.txt"): #, gain=None): 
+def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
     """
     Computes readout noise from bias FITS files, saves it to a file, and plots the result.
+    Each readout noise value is divided by the corresponding gain value.
 
     Args:
         path_files_m (list): List of paths to input FITS files (bias images).
-        filename (str): Output filename where the RDN values will be saved.
+        filename (str, optional): Output filename where the RDN values will be saved.
+            Defaults to "rdn_test.txt".
+        gain (numpy.ndarray, optional): A 1D numpy array of gain values for each extension.
+            Must have 16 elements. If None, no gain correction is applied.
+            Defaults to None.
 
     Returns:
-        None
+        None: The function writes the readout noise values to a file.  Prints
+              messages to the console for success or errors.
     """
     extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+
+    if gain is not None:
+        if not isinstance(gain, np.ndarray):
+            print("Error: gain must be a numpy array.")
+            return
+        if gain.ndim != 1:
+            print("Error: gain must be a 1D array.")
+            return
+        if len(gain) != 16:
+            print("Error: gain must have 16 elements.")
+            return
 
     for path_file in path_files_m:
         rd_noise_all = []
         for idx, ext in enumerate(extensions):
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
             roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
-            _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
-            rd_noise = rd_noise #/ gain[]
+            try:
+                # Assuming visualize_roi__mean_variance is defined elsewhere and works correctly
+                _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+            except Exception as e:
+                print(f"Error processing file {path_file}, extension {ext}: {e}")
+                rd_noise = np.nan  # Or some other appropriate error value
+            if gain is not None:
+                rd_noise = rd_noise / gain[idx]  # Corrected indexing
             rd_noise_all.append(rd_noise)
 
         try:
-            string_line = ' '.join(map(str, np.array(rd_noise_all).flatten()))
+            # Format each number to 5 decimal places in the string
+            string_line = ' '.join(f"{x:.5f}" for x in np.array(rd_noise_all).flatten())
             with open(filename, 'a') as file:
                 file.write(string_line + '\n')
             print(f"Saved: {path_file} -> '{filename}'")
         except Exception as e:
             print(f"Error writing to file: {e}")
             return
+
 
 def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     """
@@ -1226,4 +1251,130 @@ def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     fig.savefig(plot_path)
     plt.close(fig)
     print(f"Saved full 4x4 gain figure to: {plot_path}")
+    return gains
+
+def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_individual=False): #This is wrong 
+    """
+    Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis.
+    Optionally plots the gain fit for each extension, either in individual plots or a single 4x4 grid.
+    The extensions are processed in the order [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7],
+    and the ROI is updated for each extension.
+
+    Args:
+        path_files (list of str): List of FITS file paths. Each exposure time must have at least two files.
+        roi (list, optional): Initial Region of interest defined as [x_start, x_end, y_start, y_end].
+                        If None, uses a default initial ROI.  The ROI is updated for each extension.
+        min_points (int, optional): Minimum number of valid points required to perform linear fit. Defaults to 5.
+        plot_individual (bool, optional): If True, generates individual plots for each extension.
+                                         If False, generates a single 4x4 grid plot. Defaults to False.
+
+    Returns:
+        dict: A dictionary where keys are extension numbers (1-16) and values are the computed gain [e-/ADU].
+              Returns an empty dict if no gains could be calculated.
+    """
+    if roi is None:
+        roi = [545, 635, 540, 640]  # Default initial ROI.  You should adjust this.
+
+    exposure_times = defaultdict(list)
+    for file_path in path_files:
+        with fits.open(file_path) as hdul:
+            exptime = hdul[0].header.get('EXPTIME', None)
+            if exptime is not None:
+                exposure_times[exptime].append(file_path)
+
+    gains = {}
+    all_extension_data = {}  # To store data for plotting
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+
+    for idx, ext in enumerate(extensions):
+        variances = []
+        mean_sums = []
+        x_start, x_end, y_start, y_end = [roi[0] + (15 * (ext - 1)), roi[1] + (15 * (ext - 1)), roi[2], roi[3]]  # Moving ROI
+        roi = [x_start, x_end, y_start, y_end]
+
+        for files in exposure_times.values():
+            if len(files) < 2:
+                continue
+
+            file1, file2 = files[:2]
+            with fits.open(file1) as hdu1, fits.open(file2) as hdu2:
+                if ext >= len(hdu1) or ext >= len(hdu2):
+                    continue
+                data1 = hdu1[ext].data
+                data2 = hdu2[ext].data
+                if data1 is None or data2 is None:
+                    continue
+
+                roi1 = data1[y_start:y_end, x_start:x_end]
+                roi2 = data2[y_start:y_end, x_start:x_end]
+                diff = roi2 - roi1
+                var = np.var(diff)
+                sum_mean = np.mean(roi1) + np.mean(roi2)
+
+                if not np.isnan(var) and not np.isnan(sum_mean):
+                    variances.append(var)
+                    mean_sums.append(sum_mean)
+
+        if len(variances) < min_points:
+            print(f"Not enough points for extension {ext}")
+            continue
+
+        x = np.array(variances)
+        y = np.array(mean_sums)
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(x, y, min_points=min_points)
+
+        if slope is not None:
+            gain = 1 / slope
+            gains[ext] = gain
+            all_extension_data[ext] = (x, y, slope, intercept, x_best, y_best)  # Store data for plotting
+        else:
+            print(f"Gain fit failed for extension {ext}")
+            continue
+
+    # --- Plotting ---
+    if plot_individual:
+        for ext, (x, y, slope, intercept, x_best, y_best) in all_extension_data.items():
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.plot(x, y, 'o', label=f'Extension {ext}', markersize=5)
+            fit_line = np.polyval([slope, intercept], x)
+            ax.plot(x, fit_line, 'r--', label='Fit')
+            ax.text(0.05, 0.95, f"Gain: {gains[ext]:.3f} e-/ADU", transform=ax.transAxes, fontsize=10, color='red',
+                    verticalalignment='top')
+            ax.set_xlabel("Variance of the difference")
+            ax.set_ylabel("Sum of Means")
+            ax.grid(True)
+            ax.legend()
+            fig.tight_layout()
+            base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
+            output_dir = os.path.dirname(path_files[0])
+            plot_path = os.path.join(output_dir, f"gain_{base_name}_ext{ext}_gainplot.png")
+            fig.savefig(plot_path)
+            plt.close(fig)
+            print(f"Saved gain plot for extension {ext} to {plot_path}")
+    else:  # 4x4 grid plot
+        fig, axes = plt.subplots(4, 4, figsize=(16, 12))
+        axes = axes.flatten()
+        for idx, ext in enumerate(extensions):
+            ax = axes[idx]  # changed from ext-1 to idx
+            if ext in all_extension_data:
+                x, y, slope, intercept, x_best, y_best = all_extension_data[ext]
+                fit_line = np.polyval([slope, intercept], x)
+                ax.plot(x, y, 'o', markersize=4, label='Data')
+                ax.plot(x, fit_line, 'r--', label='Fit')
+                gain = gains.get(ext, np.nan)  # Use .get() to handle missing extensions
+                ax.set_title(f"Ext {idx + 1} | Gain: {gain:.2f}", fontsize=9)  # changed from ext to idx + 1
+            else:
+                ax.set_title(f"Ext {idx + 1} | Fit failed", fontsize=9) # changed from ext to idx + 1
+            ax.set_xlabel("Var", fontsize=7)
+            ax.set_ylabel("Sum", fontsize=7)
+            ax.tick_params(labelsize=6)
+            ax.grid(True)
+        fig.tight_layout()
+        base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
+        output_dir = os.path.dirname(path_files[0])
+        plot_path = os.path.join(output_dir, f"gain_4x4_grid_{base_name}.png")
+        fig.savefig(plot_path)
+        plt.close(fig)
+        print(f"Saved 4x4 gain figure to: {plot_path}")
+
     return gains
