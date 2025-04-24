@@ -328,7 +328,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
 
     # ---- PLOT ROIs ----
     if len(all_rois) > 0:
-        rows, cols = 6, 4
+        rows, cols = 5, 6 # It was 6,4
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
@@ -461,7 +461,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     # ---- PLOT ROIs ----
     if len(all_rois) > 0:
-        rows, cols = 6, 4
+        rows, cols = 5, 6 #It was 6, 4 -> 6 x 4 = 24 /2 -> 12 points
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
