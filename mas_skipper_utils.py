@@ -1129,9 +1129,6 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
         if not isinstance(gain, np.ndarray):
             print("Error: gain must be a numpy array.")
             return
-        if gain.ndim != 1:
-            print("Error: gain must be a 1D array.")
-            return
         if len(gain) != 16:
             print("Error: gain must have 16 elements.")
             return
