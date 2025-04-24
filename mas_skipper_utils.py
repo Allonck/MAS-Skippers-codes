@@ -1102,3 +1102,63 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
     except Exception as e:
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
+
+def save_and_plot_rdn(path_files_m, filename="rdn_test.txt", num_images_to_plot=2):
+    """
+    Computes readout noise from bias FITS files, saves it to a file, and plots the result.
+
+    Args:
+        path_files_m (list): List of paths to input FITS files (bias images).
+        filename (str): Output filename where the RDN values will be saved.
+        num_images_to_plot (int): Number of images to plot from the file for comparison.
+
+    Returns:
+        None
+    """
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+
+    for path_file in path_files_m:
+        rd_noise_all = []
+        for idx, ext in enumerate(extensions):
+            print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
+            roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
+            _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+            rd_noise_all.append(rd_noise)
+
+        try:
+            string_line = ' '.join(map(str, np.array(rd_noise_all).flatten()))
+            with open(filename, 'a') as file:
+                file.write(string_line + '\n')
+            print(f"Saved: {path_file} -> '{filename}'")
+        except Exception as e:
+            print(f"Error writing to file: {e}")
+            return
+
+    # ----- Read and Validate -----
+    try:
+        data = np.loadtxt(filename)
+    except FileNotFoundError:
+        print(f"File '{filename}' not found.")
+        return
+
+    if data.ndim != 2 or data.shape[1] != 16:
+        print(f"Error: Invalid shape {data.shape}, expected 2D with 16 columns.")
+        return
+
+    if data.shape[0] != len(path_files_m):
+        print(f"Warning: File rows ({data.shape[0]}) don't match input images ({len(path_files_m)})")
+
+    # ----- Plot -----
+    plt.figure(figsize=(10, 6))
+    for i in range(min(num_images_to_plot, data.shape[0])):
+        plt.plot(range(1, 13), data[i, :12], marker='o', label=f'Image {i + 1}')
+
+    plt.xlabel("Channel Number")
+    plt.ylabel("Readout Noise (e⁻)")
+    plt.title(f"Readout Noise per Channel from '{filename}'")
+    plt.xticks(range(1, 13))
+    plt.grid(True)
+    plt.legend(loc='best')
+    plt.tight_layout()
+    plt.show()
+
