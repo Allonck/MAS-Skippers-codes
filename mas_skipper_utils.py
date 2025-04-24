@@ -1103,14 +1103,13 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-def save_and_plot_rdn(path_files_m, filename="rdn_test.txt", num_images_to_plot=2):
+def save_readout_noise(path_files_m, filename="rdn_test.txt")#, num_images_to_plot=2):
     """
     Computes readout noise from bias FITS files, saves it to a file, and plots the result.
 
     Args:
         path_files_m (list): List of paths to input FITS files (bias images).
         filename (str): Output filename where the RDN values will be saved.
-        num_images_to_plot (int): Number of images to plot from the file for comparison.
 
     Returns:
         None
@@ -1134,35 +1133,35 @@ def save_and_plot_rdn(path_files_m, filename="rdn_test.txt", num_images_to_plot=
             print(f"Error writing to file: {e}")
             return
 
-    # ----- Read and Validate -----
-    try:
-        data = np.loadtxt(filename)
-    except FileNotFoundError:
-        print(f"File '{filename}' not found.")
-        return
+    # # ----- Read and Validate -----
+    # try:
+    #     data = np.loadtxt(filename)
+    # except FileNotFoundError:
+    #     print(f"File '{filename}' not found.")
+    #     return
 
-    if data.ndim != 2 or data.shape[1] != 16:
-        print(f"Error: Invalid shape {data.shape}, expected 2D with 16 columns.")
-        return
+    # if data.ndim != 2 or data.shape[1] != 16:
+    #     print(f"Error: Invalid shape {data.shape}, expected 2D with 16 columns.")
+    #     return
 
-    if data.shape[0] != len(path_files_m):
-        print(f"Warning: File rows ({data.shape[0]}) don't match input images ({len(path_files_m)})")
+    # if data.shape[0] != len(path_files_m):
+    #     print(f"Warning: File rows ({data.shape[0]}) don't match input images ({len(path_files_m)})")
 
-    # ----- Plot -----
-    plt.figure(figsize=(10, 6))
-    for i in range(min(num_images_to_plot, data.shape[0])):
-        plt.plot(range(1, 13), data[i, :12], marker='o', label=f'Image {i + 1}')
+    # # ----- Plot -----
+    # plt.figure(figsize=(10, 6))
+    # for i in range(min(num_images_to_plot, data.shape[0])):
+    #     plt.plot(range(1, 13), data[i, :12], marker='o', label=f'Image {i + 1}')
 
-    plt.xlabel("Channel Number")
-    plt.ylabel("Readout Noise (e⁻)")
-    plt.title(f"Readout Noise per Channel from '{filename}'")
-    plt.xticks(range(1, 13))
-    plt.grid(True)
-    plt.legend(loc='best')
-    plt.tight_layout()
-    plt.show()
+    # plt.xlabel("Channel Number")
+    # plt.ylabel("Readout Noise (e⁻)")
+    # plt.title(f"Readout Noise per Channel from '{filename}'")
+    # plt.xticks(range(1, 13))
+    # plt.grid(True)
+    # plt.legend(loc='best')
+    # plt.tight_layout()
+    # plt.show()
 
-def analyze_gain_all_extensions(path_files, roi_template, min_points=5):
+def analyze_gain_all_extensions(path_files, roi_template, min_points=5): #NOT TESTED
     """
     Computes gain for all 16 extensions of a MAS-CCD Skipper image using variance-mean analysis.
     Returns gain results and fit data for each extension. No ROI plots are saved.
