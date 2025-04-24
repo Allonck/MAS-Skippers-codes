@@ -4,6 +4,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 from matplotlib.patches import Rectangle #Importación corregida
+from matplotlib.gridspec import GridSpec # Para la función de analizar la gain de todas las ext?
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from collections import defaultdict  
 from sklearn.linear_model import LinearRegression
@@ -498,7 +499,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
         return None
 
     # ---- PLOT FULL WELL ----
-    slope, intercept, good_exptimes, good_means, _ = best_gain_fit(
+    slope, intercept, good_exptimes, good_means, _ = best_gain_fit( #m,b,x,y,idx
         np.array(extension_exptimes), np.array(extension_means), min_points)
 
     if slope is None:
@@ -525,7 +526,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
     fig_counts.savefig(fig_fullwell_path)
     print(f"Saved Full Well plot to {fig_fullwell_path}")
 
-    return full_well, extension_means
+    return full_well, extension_means, residuals
 
 def visualize_roi__mean_variance(file_path, roi, extension_number):
     """
@@ -1103,7 +1104,9 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-def save_readout_noise(path_files_m, filename="rdn_test.txt")#, num_images_to_plot=2):
+    # agregar de argumento un array para dividir cada fila entre la ganancia 
+    # que en el full well, se imprima el full well en pantalla y que me devuelva los residuos.
+def save_readout_noise(path_files_m, filename="rdn_test.txt"): #, gain=None): 
     """
     Computes readout noise from bias FITS files, saves it to a file, and plots the result.
 
@@ -1122,6 +1125,7 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt")#, num_images_to_pl
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
             roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
             _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+            rd_noise = rd_noise #/ gain[]
             rd_noise_all.append(rd_noise)
 
         try:
@@ -1133,104 +1137,93 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt")#, num_images_to_pl
             print(f"Error writing to file: {e}")
             return
 
-    # # ----- Read and Validate -----
-    # try:
-    #     data = np.loadtxt(filename)
-    # except FileNotFoundError:
-    #     print(f"File '{filename}' not found.")
-    #     return
-
-    # if data.ndim != 2 or data.shape[1] != 16:
-    #     print(f"Error: Invalid shape {data.shape}, expected 2D with 16 columns.")
-    #     return
-
-    # if data.shape[0] != len(path_files_m):
-    #     print(f"Warning: File rows ({data.shape[0]}) don't match input images ({len(path_files_m)})")
-
-    # # ----- Plot -----
-    # plt.figure(figsize=(10, 6))
-    # for i in range(min(num_images_to_plot, data.shape[0])):
-    #     plt.plot(range(1, 13), data[i, :12], marker='o', label=f'Image {i + 1}')
-
-    # plt.xlabel("Channel Number")
-    # plt.ylabel("Readout Noise (e⁻)")
-    # plt.title(f"Readout Noise per Channel from '{filename}'")
-    # plt.xticks(range(1, 13))
-    # plt.grid(True)
-    # plt.legend(loc='best')
-    # plt.tight_layout()
-    # plt.show()
-
-def analyze_gain_all_extensions(path_files, roi_template, min_points=5): #NOT TESTED
+def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     """
-    Computes gain for all 16 extensions of a MAS-CCD Skipper image using variance-mean analysis.
-    Returns gain results and fit data for each extension. No ROI plots are saved.
+    Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis,
+    for a fixed ROI. Creates a single figure with a 4x4 grid of subplots (one per extension) showing
+    the gain fit for each.
 
     Args:
-        path_files (list of str): List of FITS file paths to be processed.
-        roi_template (list of int): Base ROI in the format [x_start, x_end, y_start, y_end].
-        min_points (int): Minimum number of points required to perform the gain fit.
+        path_files (list of str): List of FITS file paths. Each exposure time must have at least two files.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
+        min_points (int): Minimum number of valid points required to perform linear fit.
 
     Returns:
-        dict: A dictionary where each key is the extension index (1-16), and the value is a dict:
-              {'gain': float, 'x': np.array, 'y': np.array, 'slope': float, 'intercept': float}
+        list: Gain values [e-/ADU] for each of the 16 extensions.
+
+    Notes:
+        - Uses the first two files per exposure time to compute variance and mean-sum.
+        - Each subplot includes the gain fit curve and computed gain (1/slope).
+        - Saves a single figure named `gain_4x4_grid_<basename>.png` in the same directory as the first file.
+        - Uses the helper function `best_gain_fit()` for outlier-robust linear regression.
     """
-    from collections import defaultdict
-    import numpy as np
-    from astropy.io import fits
+    exposure_times = defaultdict(list)
+    for file_path in path_files:
+        with fits.open(file_path) as hdul:
+            exptime = hdul[0].header.get("EXPTIME", None)
+            if exptime is not None:
+                exposure_times[exptime].append(file_path)
 
-    results = {}
-    ext_order = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
+    gains = [np.nan] * 16
+    fig, axes = plt.subplots(4, 4, figsize=(16, 12))
+    axes = axes.flatten()
 
-    for idx, ext in enumerate(ext_order):
-        extension_number = idx + 1
-        roi = [roi_template[0] + (15 * (ext - 1)),
-               roi_template[1] + (15 * (ext - 1)),
-               roi_template[2], roi_template[3]]
+    for ext in range(1, 17):
+        variances = []
+        mean_sums = []
 
-        exposure_times = defaultdict(list)
-        extension_variances = []
-        extension_sum_of_means = []
+        for files in exposure_times.values():
+            if len(files) < 2:
+                continue
 
-        for file_path in path_files:
-            with fits.open(file_path) as hdul:
-                exptime = hdul[0].header.get("EXPTIME", None)
-                if exptime is not None:
-                    exposure_times[exptime].append(file_path)
+            file1, file2 = files[:2]
+            with fits.open(file1) as hdu1, fits.open(file2) as hdu2:
+                if ext >= len(hdu1) or ext >= len(hdu2):
+                    continue
+                data1 = hdu1[ext].data
+                data2 = hdu2[ext].data
+                if data1 is None or data2 is None:
+                    continue
 
-        for exptime in sorted(exposure_times):
-            files = exposure_times[exptime]
-            if len(files) >= 2:
-                with fits.open(files[0]) as hdul1, fits.open(files[1]) as hdul2:
-                    if extension_number >= len(hdul1) or extension_number >= len(hdul2):
-                        continue
-                    data1 = hdul1[extension_number].data
-                    data2 = hdul2[extension_number].data
-                    if data1 is None or data2 is None:
-                        continue
-                    x1, x2, y1, y2 = roi
-                    diff_data = data2[y1:y2, x1:x2] - data1[y1:y2, x1:x2]
-                    variance = np.var(diff_data)
-                    mean_sum = np.mean(data1[y1:y2, x1:x2]) + np.mean(data2[y1:y2, x1:x2])
-                    if not (np.isnan(variance) or np.isnan(mean_sum)):
-                        extension_variances.append(variance)
-                        extension_sum_of_means.append(mean_sum)
+                x_start, x_end, y_start, y_end = roi
+                roi1 = data1[y_start:y_end, x_start:x_end]
+                roi2 = data2[y_start:y_end, x_start:x_end]
+                diff = roi2 - roi1
+                var = np.var(diff)
+                sum_mean = np.mean(roi1) + np.mean(roi2)
 
-        if len(extension_variances) < min_points:
-            print(f"Extension {extension_number}: Not enough valid points")
+                if not np.isnan(var) and not np.isnan(sum_mean):
+                    variances.append(var)
+                    mean_sums.append(sum_mean)
+
+        if len(variances) < min_points:
             continue
 
-        x = np.array(extension_variances)
-        y = np.array(extension_sum_of_means)
-        slope, intercept = np.polyfit(x, y, 1)
-        gain = 1 / slope
+        x = np.array(variances)
+        y = np.array(mean_sums)
+        slope, intercept, _, _, _ = best_gain_fit(x, y, min_points=min_points)
 
-        results[extension_number] = {
-            "gain": gain,
-            "x": x,
-            "y": y,
-            "slope": slope,
-            "intercept": intercept
-        }
+        ax = axes[ext - 1]
+        if slope is not None:
+            fit_line = np.polyval([slope, intercept], x)
+            ax.plot(x, y, 'o', markersize=4, label='Data')
+            ax.plot(x, fit_line, 'r--', label='Fit')
+            gain = 1 / slope
+            gains[ext - 1] = gain
+            ax.set_title(f"Ext {ext} | Gain: {gain:.2f}", fontsize=9)
+        else:
+            ax.set_title(f"Ext {ext} | Fit failed", fontsize=9)
 
-    return results
+        ax.set_xlabel("Var", fontsize=7)
+        ax.set_ylabel("Sum", fontsize=7)
+        ax.tick_params(labelsize=6)
+        ax.grid(True)
+
+    fig.tight_layout()
+    base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
+    output_dir = os.path.dirname(path_files[0])
+    plot_path = os.path.join(output_dir, f"gain_4x4_grid_{base_name}.png")
+    fig.savefig(plot_path)
+    plt.close(fig)
+    print(f"Saved full 4x4 gain figure to: {plot_path}")
+    return gains
