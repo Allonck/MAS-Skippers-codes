@@ -259,7 +259,7 @@ def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
     show_fits_image(output_file, index=1, cmap="gray")
     return hdu
     
-def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min_points=5):
+def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5):
     """
     Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling 
     and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit.
@@ -268,10 +268,10 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
         path_files (list of str): List of FITS file paths to be processed. Each exposure time must have at least two files.
         roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
         extension_number (int): Index of the FITS extension (amplifier) to be analyzed.
-        min_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
 
     Returns:
-        list of float: A list containing the computed gain value [e⁻/ADU] for the specified extension.
+        list of float: A list containing the computed gain value [ADU/e⁻] for the specified extension.
 
     Raises:
         None explicitly, but skips extensions or images with invalid data.
@@ -329,7 +329,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
 
     # ---- PLOT ROIs ----
     if len(all_rois) > 0:
-        rows, cols = 5, 6 # It was 6,4
+        rows, cols = 9, 8 #It was 6,4
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
@@ -368,7 +368,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     extension_variances = np.array(extension_variances)
     extension_sum_of_means = np.array(extension_sum_of_means)
 
-    slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
+    slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, n_points)
     if slope is None:
         print(f"Not enough points for the extension  {extension_number}")
         return None
@@ -379,8 +379,9 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     fig_gain, ax_gain = plt.subplots(figsize=(8, 6))
     ax_gain.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {extension_number}', color="blue", markersize=5)
     fit_line = np.polyval([slope, intercept], extension_variances)
+    #ax_gain.plot(extension_variances[list(best_indices)], extension_sum_of_means[list(best_indices)], 'go', label=f'Fit points')
     ax_gain.plot(extension_variances, fit_line, 'r--', label=f'Fit')
-    ax_gain.text(0.05, 0.95, f"Gain: {1 / slope:.3f} e-/ADU", transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
+    ax_gain.text(0.05, 0.95, f"Gain: {1 / slope:.3f} ADU/e-", transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
     ax_gain.set_xlabel("Varianza de la diferencia")
     ax_gain.set_ylabel("Suma de Medias")
     ax_gain.grid()
@@ -394,9 +395,151 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, min
     fig_gain.savefig(fig_gain_path)
     print(f"Saved gain plot to {fig_gain_path}")
 
-    return list(gains.values())
+    return list(gains.values()), len(best_indices)
 
-def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, min_points=5, threshold=0.01):
+def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5):
+    """
+    Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling
+    and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit,
+    highlighting the points used in the robust linear fit.
+
+    Args:
+        path_files (list of str): List of FITS file paths to be processed. Each exposure time must have at least two files.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
+        extension_number (int): Index of the FITS extension (amplifier) to be analyzed.
+        n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+
+    Returns:
+        list of float: A list containing the computed gain value [ADU/e⁻] for the specified extension.
+        int: The number of data points used in the final robust fit.
+
+    Raises:
+        None explicitly, but skips extensions or images with invalid data.
+
+    Notes:
+        - For each exposure time, the function uses the first two FITS files to compute the variance of the pixel difference
+          and the sum of the mean counts in the ROI.
+        - A robust linear regression is performed on variance vs. mean-sum using `best_gain_fit_fast()`
+          to estimate the inverse gain (1/slope), iteratively discarding outliers.
+        - Generates and saves two diagnostic plots in the same directory as the FITS files:
+            1. Side-by-side display of all ROIs used.
+            2. Gain fitting curve (Variance vs. Mean-sum) with highlighted points used in the fit.
+        - ROI plots are saved as: `gain_<basename>_ext<extension>_rois.png`
+        - Gain plots are saved as: `gain_<basename>_ext<extension>_gainplot.png`
+    """
+    gains = {}
+    exposure_times = defaultdict(list)
+    all_rois = []
+
+    for file_path in path_files:
+        with fits.open(file_path) as hdulist:
+            exptime = hdulist[0].header.get('EXPTIME', None)
+            if exptime is None:
+                continue
+            exposure_times[exptime].append(file_path)
+
+    extension_variances = []
+    extension_sum_of_means = []
+    exposure_time_keys = sorted(exposure_times.keys())
+
+    for exptime in exposure_time_keys:
+        files = exposure_times[exptime]
+        if len(files) >= 2:
+            file1, file2 = files[:2]
+            with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                if extension_number >= len(hdul1) or extension_number >= len(hdul2):
+                    continue
+                data1 = hdul1[extension_number].data
+                data2 = hdul2[extension_number].data
+                if data1 is None or data2 is None:
+                    continue
+                if roi:
+                    x_start, x_end, y_start, y_end = roi
+                    data1_roi = data1[y_start:y_end, x_start:x_end]
+                    data2_roi = data2[y_start:y_end, x_start:x_end]
+                    diff_data = data2_roi - data1_roi
+                    variance = np.var(diff_data)
+                    sum_of_mean = np.mean(data2_roi) + np.mean(data1_roi)
+
+                    if np.isnan(variance) or np.isnan(sum_of_mean):
+                        continue
+                    extension_variances.append(variance)
+                    extension_sum_of_means.append(sum_of_mean)
+                    all_rois.append((data1_roi, data2_roi, file1, file2))
+
+    # ---- PLOT ROIs ----
+    if len(all_rois) > 0:
+        rows, cols = 9, 8 # Adjusted for potential more ROIs. It was
+        fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
+        axes = axes.flatten()
+
+        for i, (data1_roi, data2_roi, file1, file2) in enumerate(all_rois):
+            zlow1, zhigh1 = ZScaleInterval().get_limits(data1_roi)
+            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i].invert_yaxis()
+            contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
+            exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
+            axes[2*i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
+            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8,
+                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+            zlow2, zhigh2 = ZScaleInterval().get_limits(data2_roi)
+            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i+1].invert_yaxis()
+            contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
+            exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
+            axes[2*i+1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
+            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8,
+                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+        fig_rois.tight_layout()
+
+        # Guardar ROI plot
+        roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
+        roi_dir = os.path.dirname(path_files[0])
+        fig_rois_path = os.path.join(roi_dir, f"gain_{roi_base}_ext{extension_number}_rois.png")
+        fig_rois.savefig(fig_rois_path)
+        print(f"Saved ROI plot to {fig_rois_path}")
+
+    if len(extension_variances) < n_points:
+        print(f"Not enough data points ({len(extension_variances)}) for the extension {extension_number} to perform robust fit.")
+        return None, 0
+
+    extension_variances = np.array(extension_variances)
+    extension_sum_of_means = np.array(extension_sum_of_means)
+
+    slope, intercept, x_best, y_best, best_indices = best_gain_fit_fast(extension_variances, extension_sum_of_means, n_points)
+
+    if slope is None:
+        print(f"Not enough valid data points after robust fitting for extension {extension_number}.")
+        return None, 0
+
+    gains[extension_number] = 1 / slope
+    num_fit_points = len(best_indices)
+
+    # ---- PLOT GANANCIA ----
+    fig_gain, ax_gain = plt.subplots(figsize=(8, 6))
+    ax_gain.plot(extension_variances, extension_sum_of_means, 'o', label=f'Data Points (Ext {extension_number})', color="blue", markersize=5)
+    fit_line = np.polyval([slope, intercept], extension_variances)
+    ax_gain.plot(extension_variances[best_indices], extension_sum_of_means[best_indices], 'go', label=f'Points Used in Fit ({num_fit_points})')
+    ax_gain.plot(x_best, fit_line, 'r--', label=f'Robust Linear Fit')
+    ax_gain.text(0.05, 0.95, f"Gain: {1 / slope:.3f} ADU/e-", transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
+    ax_gain.set_xlabel("Variance of Pixel Difference (ADU²)")
+    ax_gain.set_ylabel("Sum of Means (ADU)")
+    ax_gain.grid()
+    ax_gain.legend()
+    fig_gain.tight_layout()
+
+    # Guardar plot de ganancia
+    gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
+    gain_dir = os.path.dirname(path_files[0])
+    fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
+    fig_gain.savefig(fig_gain_path)
+    print(f"Saved gain plot to {fig_gain_path}")
+
+    return list(gains.values()), num_fit_points
+    
+def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5, threshold=0.01):
     """
     Estimates the full-well capacity of a MAS-CCD Skipper extension using dynamic ROI selection.
     The method fits a linear model to the mean counts versus exposure time and detects deviation 
@@ -406,7 +549,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
         path_files (list of str): List of FITS file paths grouped by exposure time. Each group must contain at least two images.
         roi (list): Region of interest defined as [x_start, x_end, y_start, y_end]
         extension_number (int): FITS extension number to analyze (corresponding to a specific amplifier).
-        min_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
         threshold (float, optional): Maximum allowed fractional residual from the linear model before identifying the full-well limit. 
         Defaults to 0.01 (1%).
 
@@ -462,7 +605,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     # ---- PLOT ROIs ----
     if len(all_rois) > 0:
-        rows, cols = 5, 6 #It was 6, 4 -> 6 x 4 = 24 /2 -> 12 points
+        rows, cols = 9, 8 #It was 6, 4 -> 6 x 4 = 24 /2 -> 12 points
         fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
         axes = axes.flatten()
 
@@ -499,8 +642,8 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
         return None
 
     # ---- PLOT FULL WELL ----
-    slope, intercept, good_exptimes, good_means, _ = best_gain_fit( #m,b,x,y,idx
-        np.array(extension_exptimes), np.array(extension_means), min_points)
+    slope, intercept, good_exptimes, good_means, good_indices = best_gain_fit( #m,b,x,y,idx
+        np.array(extension_exptimes), np.array(extension_means), n_points)
 
     if slope is None:
         return None
@@ -512,6 +655,7 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     fig_counts, ax_counts = plt.subplots(figsize=(8, 6))
     ax_counts.plot(extension_exptimes, extension_means, 'o', label=f'Ext {extension_number}', color="red", markersize=5)
+    #ax_counts.plot(good_exptimes, good_means, 'go', label='Fit points', markersize=5)
     ax_counts.plot(good_exptimes, fit_line, 'b--', label='Ajuste Lineal')
     ax_counts.axvline(x=good_exptimes[full_well_index], color='g', linestyle='--', label='Full Well')
     ax_counts.set_title(f"Extensión {extension_number}")
@@ -528,6 +672,156 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     return full_well, extension_means, residuals
 
+
+def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, threshold=0.01):
+    """
+    Estimates the full-well capacity of a MAS-CCD Skipper extension using dynamic ROI selection.
+    The method fits a robust linear model to the mean counts versus exposure time and detects deviation
+    beyond a given residual threshold to define the full-well limit, highlighting the points used in the fit.
+
+    Args:
+        path_files (list of str): List of FITS file paths grouped by exposure time. Each group must contain at least two images.
+        roi (list): Region of interest defined as [x_start, x_end, y_start, y_end]
+        extension_number (int): FITS extension number to analyze (corresponding to a specific amplifier).
+        n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        threshold (float, optional): Maximum allowed fractional residual from the linear model before identifying the full-well limit.
+                                     Defaults to 0.01 (1%).
+
+    Returns:
+        tuple:
+            float: Estimated full-well value (in ADU) where non-linearity exceeds the threshold.
+            list: List of mean counts from all exposure pairs in the ROI.
+            np.ndarray: Array of residuals from the robust linear fit.
+            np.ndarray: Array of exposure times used in the robust linear fit.
+            np.ndarray: Array of mean counts used in the robust linear fit.
+
+    Notes:
+        - For each exposure time, only the first two files are used to compute average ROI counts.
+        - A robust linear fit is performed to the average counts versus exposure time using `best_gain_fit_fast()`.
+        - The full-well is defined as the first point where the relative residual from the robust fit exceeds the threshold.
+        - Saves the following plots:
+            - ROI comparison: `fw_<basename>_ext<extension>_rois.png`
+            - Full-well fitting: `fw_<basename>_ext<extension>_fullwell.png` with highlighted fit points.
+        - ROI and gain plots are saved in the same directory as the input FITS files.
+    """
+
+    exposure_times = defaultdict(list)
+    all_rois = []
+    extension_exptimes = []
+    extension_means = []
+
+    for file_path in path_files:
+        with fits.open(file_path) as hdulist:
+            exptime = hdulist[0].header.get('EXPTIME', None)
+            if exptime is None:
+                continue
+            exposure_times[exptime].append(file_path)
+
+    exposure_time_keys = sorted(exposure_times.keys())
+
+    for exptime in exposure_time_keys:
+        files = exposure_times[exptime]
+        if len(files) >= 2:
+            file1, file2 = files[:2]
+            with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                if extension_number >= len(hdul1) or extension_number >= len(hdul2):
+                    continue
+                data1 = hdul1[extension_number].data
+                data2 = hdul2[extension_number].data
+                if data1 is None or data2 is None:
+                    continue
+                if roi:
+                    x_start, x_end, y_start, y_end = roi
+                    data1_roi = data1[y_start:y_end, x_start:x_end]
+                    data2_roi = data2[y_start:y_end, x_start:x_end]
+                    mean_data = (np.mean(data1_roi) + np.mean(data2_roi)) / 2
+                    extension_exptimes.append(exptime)
+                    extension_means.append(mean_data)
+                    all_rois.append((data1_roi, data2_roi, file1, file2))
+
+    # ---- PLOT ROIs ----
+    if len(all_rois) > 0:
+        rows, cols = 9, 8 #It was
+        fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
+        axes = axes.flatten()
+
+        for i, (data1_roi, data2_roi, file1, file2) in enumerate(all_rois):
+            zlow1, zhigh1 = ZScaleInterval().get_limits(data1_roi)
+            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i].invert_yaxis()
+            contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
+            exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
+            axes[2*i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
+            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8,
+                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+            zlow2, zhigh2 = ZScaleInterval().get_limits(data2_roi)
+            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start])
+            axes[2*i+1].invert_yaxis()
+            contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
+            exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
+            axes[2*i+1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
+            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8,
+                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+        fig_rois.tight_layout()
+
+        # Guardar imagen
+        base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
+        output_dir = os.path.dirname(path_files[0])
+        fig_rois_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_rois.png")
+        fig_rois.savefig(fig_rois_path)
+        print(f"Saved ROI plot to {fig_rois_path}")
+
+    if len(extension_exptimes) < n_points:
+        print(f"Not enough data points ({len(extension_exptimes)}) for the extension {extension_number} to perform robust fit.")
+        return None, extension_means, None, np.array(extension_exptimes), np.array(extension_means)
+
+    # ---- PLOT FULL WELL ----
+    extension_exptimes_arr = np.array(extension_exptimes)
+    extension_means_arr = np.array(extension_means)
+
+    slope, intercept, x_best, y_best, good_indices = best_gain_fit_fast(extension_exptimes_arr, extension_means_arr, n_points)
+
+    if slope is None:
+        print(f"Not enough valid data points after robust fitting for extension {extension_number}.")
+        return None, extension_means, None, extension_exptimes_arr, extension_means_arr
+
+    fit_line = np.polyval([slope, intercept], extension_exptimes_arr)
+    residuals = np.abs(extension_means_arr - fit_line) / extension_means_arr
+    good_residuals = residuals[good_indices]
+    good_exptimes = extension_exptimes_arr[good_indices]
+    good_means = extension_means_arr[good_indices]
+
+    full_well_index_in_fit = np.where(good_residuals > threshold)[0]
+    if full_well_index_in_fit.size > 0:
+        first_exceeding_index = full_well_index_in_fit[0]
+        full_well_exptime = good_exptimes[first_exceeding_index]
+        full_well_mean = good_means[first_exceeding_index]
+    else:
+        full_well_exptime = good_exptimes[-1]
+        full_well_mean = good_means[-1]
+        print(f"Full well not reached within threshold. Returning value at max exposure time.")
+
+    fig_counts, ax_counts = plt.subplots(figsize=(8, 6))
+    ax_counts.plot(extension_exptimes_arr, extension_means_arr, 'o', label=f'Data Points (Ext {extension_number})', color="red", markersize=5)
+    ax_counts.plot(good_exptimes, good_means, 'go', label=f'Points Used in Fit ({len(good_indices)})', markersize=5)
+    ax_counts.plot(extension_exptimes_arr, fit_line, 'b--', label='Robust Linear Fit')
+    ax_counts.axvline(x=full_well_exptime, color='g', linestyle='--', label=f'Full Well ≈ {full_well_mean:.2f} ADU')
+    ax_counts.set_title(f"Full Well Estimation - Extension {extension_number}")
+    ax_counts.set_xlabel("Exposure Time (s)")
+    ax_counts.set_ylabel("Mean Counts (ADU)")
+    ax_counts.grid()
+    ax_counts.legend()
+    fig_counts.tight_layout()
+
+    # Guardar imagen
+    fig_fullwell_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_fullwell.png")
+    fig_counts.savefig(fig_fullwell_path)
+    print(f"Saved Full Well plot to {fig_fullwell_path}")
+
+    return full_well_mean, extension_means, residuals
+    
 def visualize_roi__mean_variance(file_path, roi, extension_number):
     """
     Displays a region of interest (ROI) from a FITS image and computes its mean and standard deviation.
@@ -929,7 +1223,7 @@ def plot_exposure_time_vs_mean(path_files, roi=None):
     plt.show()
     return all_extension_means
     
-def best_gain_fit(x, y, min_points=5):
+def best_gain_fit(x, y, min_points=5): 
     """
     Encuentra el mejor ajuste lineal eliminando outliers usando el criterio de menor MSE.
     Se asegura de usar al menos `min_points` para evitar ajustes sobre pocos datos.
@@ -970,7 +1264,38 @@ def best_gain_fit(x, y, min_points=5):
 
     return slope, intercept, x_best, y_best, best_indices
 
-def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, min_points=5):
+def best_gain_fit_fast(x, y, n_points=5, clip_sigma=0.01, max_iter=10):
+    if len(x) < n_points:
+        return None, None, None
+
+    indices = np.arange(len(x))
+    for _ in range(max_iter):
+        model = LinearRegression()
+        x_best = x[indices]
+        y_best = y[indices]
+        model.fit(x_best.reshape(-1, 1), y_best)
+        y_pred = model.predict(x[indices].reshape(-1, 1))
+        residuals = np.abs(y[indices] - y_pred) / y[indices]
+
+        good = residuals <= clip_sigma
+
+        if np.all(good):
+            break
+        if np.sum(good) < n_points:
+            break
+        indices = indices[good]
+
+    if len(indices) >= n_points:
+        model = LinearRegression()
+        model.fit(x[indices].reshape(-1, 1), y[indices])
+        slope = model.coef_[0]
+        intercept = model.intercept_
+        return slope, intercept, x_best, y_best, indices
+    else:
+        return None, None, None
+
+    
+def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, n_points=5):
     """
     Grafica el tiempo de exposición (EXPTIME) vs la media, realiza un ajuste lineal,
     descarta puntos con residuales < threshold y encuentra el full well.
@@ -1028,7 +1353,7 @@ def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, 
             all_extension_full_wells.append(None)
             continue
 
-        slope, intercept, good_exptimes, good_means, _ = best_gain_fit(np.array(extension_exptimes), np.array(extension_means),min_points)
+        slope, intercept, good_exptimes, good_means, good_indices = best_gain_fit(np.array(extension_exptimes), np.array(extension_means),n_points)
 
         if slope is None:
             all_extension_full_wells.append(None)
@@ -1043,6 +1368,7 @@ def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, 
         all_extension_full_wells.append(full_well)
 
         ax.plot(extension_exptimes, extension_means, 'o', label=f'Ext {ext}', color="red", markersize=5)
+        #ax.plot(extension_exptimes[list(good_indices)], extension_means[list(good_indices)], 'go', label='Fit points', markersize=5)
         ax.plot(good_exptimes, fit_line, 'b--', label='Ajuste Lineal')
         ax.axvline(x=good_exptimes[full_well_index], color='g', linestyle='--', label='Full Well')
 
@@ -1104,9 +1430,9 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
+def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, return_mean=False):
     """
-    Computes readout noise from bias FITS files, saves it to a file, and plots the result.
+    Computes readout noise from bias FITS files, saves it to a file, and optionally saves the mean.
     Each readout noise value is divided by the corresponding gain value.
 
     Args:
@@ -1116,10 +1442,12 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
         gain (numpy.ndarray, optional): A 1D numpy array of gain values for each extension.
             Must have 16 elements. If None, no gain correction is applied.
             Defaults to None.
+        return_mean (bool, optional): If True, saves the mean of the readout ROI to a separate
+            file (filename_mean). Defaults to False.
 
     Returns:
-        None: The function writes the readout noise values to a file.  Prints
-              messages to the console for success or errors.
+        None: The function writes the readout noise and optionally mean values to file(s).
+              Prints messages to the console for success or errors.
     """
     extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
 
@@ -1131,32 +1459,44 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None):
             print("Error: gain must have 16 elements.")
             return
 
+    print ("Note that using 895 as NROW, for the X axis the min. value is 545 & max. value is 635")
     for path_file in path_files_m:
         rd_noise_all = []
+        rd_mean_all = []  # Initialize inside the file loop!
         for idx, ext in enumerate(extensions):
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
             roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
             try:
                 # Assuming visualize_roi__mean_variance is defined elsewhere and works correctly
-                _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+                rd_mean, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
             except Exception as e:
                 print(f"Error processing file {path_file}, extension {ext}: {e}")
                 rd_noise = np.nan  # Or some other appropriate error value
+                rd_mean = np.nan
             if gain is not None:
                 rd_noise = rd_noise / gain[idx]  # Corrected indexing
+                rd_mean = rd_mean / gain[idx]
             rd_noise_all.append(rd_noise)
+            rd_mean_all.append(rd_mean) # Append the rd_mean
 
         try:
             # Format each number to 5 decimal places in the string
-            string_line = ' '.join(f"{x:.5f}" for x in np.array(rd_noise_all).flatten())
-            with open(filename, 'a') as file:
-                file.write(string_line + '\n')
-            print(f"Saved: {path_file} -> '{filename}'")
+            string_line_noise = ' '.join(f"{x:.5f}" for x in np.array(rd_noise_all).flatten())
+            with open(filename, 'a') as file_noise: #open file
+                file_noise.write(string_line_noise + '\n')
+            print(f"Saved noise: {path_file} -> '{filename}'")
+            if return_mean:
+                filename_mean = filename.replace(".txt", "_mean.txt") #new filename
+                string_line_mean = ' '.join(f"{x:.2f}" for x in np.array(rd_mean_all).flatten())
+                with open(filename_mean, 'a') as file_mean:
+                    file_mean.write(string_line_mean + '\n')
+                print(f"Saved mean: {path_file} -> '{filename_mean}'")
+
         except Exception as e:
             print(f"Error writing to file: {e}")
             return
 
-def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
+def gain_plot_all_extensions_single_figure(path_files, roi, n_points=5):
     """
     Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis,
     for a fixed ROI. Creates a single figure with a 4x4 grid of subplots (one per extension) showing
@@ -1165,10 +1505,10 @@ def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     Args:
         path_files (list of str): List of FITS file paths. Each exposure time must have at least two files.
         roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
-        min_points (int): Minimum number of valid points required to perform linear fit.
+        n_points (int): Minimum number of valid points required to perform linear fit.
 
     Returns:
-        list: Gain values [e-/ADU] for each of the 16 extensions.
+        list: Gain values [ADU/e-] for each of the 16 extensions.
 
     Notes:
         - Uses the first two files per exposure time to compute variance and mean-sum.
@@ -1215,17 +1555,18 @@ def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
                     variances.append(var)
                     mean_sums.append(sum_mean)
 
-        if len(variances) < min_points:
+        if len(variances) < n_points:
             continue
 
         x = np.array(variances)
         y = np.array(mean_sums)
-        slope, intercept, _, _, _ = best_gain_fit(x, y, min_points=min_points)
+        slope, intercept, x_best, y_best, indices = best_gain_fit(x, y, n_points=n_points)
 
         ax = axes[ext - 1]
         if slope is not None:
             fit_line = np.polyval([slope, intercept], x)
             ax.plot(x, y, 'o', markersize=4, label='Data')
+            #ax.plot(x[list(indices)], y[list(indices)], 'go', markersize=4, label='Fit points')
             ax.plot(x, fit_line, 'r--', label='Fit')
             gain = 1 / slope
             gains[ext - 1] = gain
@@ -1247,7 +1588,7 @@ def gain_plot_all_extensions_single_figure(path_files, roi, min_points=5):
     print(f"Saved full 4x4 gain figure to: {plot_path}")
     return gains
 
-def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_individual=False): #This is wrong 
+def calculate_gain_all_extensions(path_files, roi=None, n_points=5, plot_individual=False): #This is wrong 
     """
     Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis.
     Optionally plots the gain fit for each extension, either in individual plots or a single 4x4 grid.
@@ -1258,12 +1599,12 @@ def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_indiv
         path_files (list of str): List of FITS file paths. Each exposure time must have at least two files.
         roi (list, optional): Initial Region of interest defined as [x_start, x_end, y_start, y_end].
                         If None, uses a default initial ROI.  The ROI is updated for each extension.
-        min_points (int, optional): Minimum number of valid points required to perform linear fit. Defaults to 5.
+        n_points (int, optional): Minimum number of valid points required to perform linear fit. Defaults to 5.
         plot_individual (bool, optional): If True, generates individual plots for each extension.
                                          If False, generates a single 4x4 grid plot. Defaults to False.
 
     Returns:
-        dict: A dictionary where keys are extension numbers (1-16) and values are the computed gain [e-/ADU].
+        dict: A dictionary where keys are extension numbers (1-16) and values are the computed gain [ADU/e-].
               Returns an empty dict if no gains could be calculated.
     """
     if roi is None:
@@ -1309,30 +1650,31 @@ def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_indiv
                     variances.append(var)
                     mean_sums.append(sum_mean)
 
-        if len(variances) < min_points:
+        if len(variances) < n_points:
             print(f"Not enough points for extension {ext}")
             continue
 
         x = np.array(variances)
         y = np.array(mean_sums)
-        slope, intercept, x_best, y_best, best_indices = best_gain_fit(x, y, min_points=min_points)
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(x, y, n_points=n_points)
 
         if slope is not None:
             gain = 1 / slope
             gains[ext] = gain
-            all_extension_data[ext] = (x, y, slope, intercept, x_best, y_best)  # Store data for plotting
+            all_extension_data[ext] = (x, y, slope, intercept, x_best, y_best, best_indices)  # Store data for plotting
         else:
             print(f"Gain fit failed for extension {ext}")
             continue
 
     # --- Plotting ---
     if plot_individual:
-        for ext, (x, y, slope, intercept, x_best, y_best) in all_extension_data.items():
+        for ext, (x, y, slope, intercept, x_best, y_best, best_indices) in all_extension_data.items():
             fig, ax = plt.subplots(figsize=(8, 6))
             ax.plot(x, y, 'o', label=f'Extension {ext}', markersize=5)
             fit_line = np.polyval([slope, intercept], x)
+            #ax.plot(x[list(best_indices)], y_best[list(best_indices)], 'go', label='Fit points')
             ax.plot(x, fit_line, 'r--', label='Fit')
-            ax.text(0.05, 0.95, f"Gain: {gains[ext]:.3f} e-/ADU", transform=ax.transAxes, fontsize=10, color='red',
+            ax.text(0.05, 0.95, f"Gain: {gains[ext]:.3f} ADU/e-", transform=ax.transAxes, fontsize=10, color='red',
                     verticalalignment='top')
             ax.set_xlabel("Variance of the difference")
             ax.set_ylabel("Sum of Means")
@@ -1354,6 +1696,7 @@ def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_indiv
                 x, y, slope, intercept, x_best, y_best = all_extension_data[ext]
                 fit_line = np.polyval([slope, intercept], x)
                 ax.plot(x, y, 'o', markersize=4, label='Data')
+                #ax.plot(x[list(best_indices)], y[list(best_indices)], 'go', markersize=4, label='Fit points')
                 ax.plot(x, fit_line, 'r--', label='Fit')
                 gain = gains.get(ext, np.nan)  # Use .get() to handle missing extensions
                 ax.set_title(f"Ext {idx + 1} | Gain: {gain:.2f}", fontsize=9)  # changed from ext to idx + 1
@@ -1393,7 +1736,7 @@ def calculate_gain_all_extensions(path_files, roi=None, min_points=5, plot_indiv
 ###################################################
     #########################
 #########################
-def new_gain(path_files, roi, min_points=5): 
+def new_gain(path_files, roi, n_points=5): 
     """
     Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
     NOTA: EL ROI ES FIJO. ESTOY USANDO UN ROI COMÜN PARA LAS 16 EXTENSIONES QUE ES DENTRO DE 260,440 EN X*
@@ -1456,7 +1799,7 @@ def new_gain(path_files, roi, min_points=5):
         extension_sum_of_means = np.array(extension_sum_of_means)
         all_extension_sum_of_means.extend(extension_sum_of_means)
 
-        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, n_points)
         if slope is None:
             continue
 
@@ -1499,15 +1842,16 @@ def new_gain(path_files, roi, min_points=5):
         extension_variances = np.array(extension_variances)
         extension_sum_of_means = np.array(extension_sum_of_means)
 
-        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, min_points)
+        slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means, n_points)
         if slope is None:
             continue
 
         gains[ext] = 1 / slope
         ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext}', color="blue", markersize=5)
         fit_line = np.polyval([slope, intercept], extension_variances)
+        #ax.plot(extension_variances[list(best_indices)], extension_sum_of_means[list(best_indices)], 'go', label=f'Fit points', markersize=5)
         ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
-        gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
+        gain_text = f"Gain: {1 / slope:.3f} ADU/e-"
         ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
         ax.set_title(f"Extensión {ext}")
         ax.set_xlabel("Varianza de la diferencia")
@@ -1520,7 +1864,7 @@ def new_gain(path_files, roi, min_points=5):
     gains = list(gains.values())
     return gains
 
-def new_gain_mod(path_files, roi=None, min_points=5):
+def new_gain_mod(path_files, roi=None, n_points=5):
     """
     Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
     El ROI es dinámico y se ajusta para cada extensión.
@@ -1529,7 +1873,7 @@ def new_gain_mod(path_files, roi=None, min_points=5):
         path_files (list of str): Lista de rutas de archivos FITS.
         roi (list, optional): ROI inicial definido como [x_start, x_end, y_start, y_end].
                         Si es None, se utiliza un ROI inicial por defecto. El ROI se actualiza para cada extensión.
-        min_points (int, optional): Mínimo número de puntos válidos requeridos para realizar el ajuste lineal.
+        n_points (int, optional): Mínimo número de puntos válidos requeridos para realizar el ajuste lineal.
                         Por defecto es 5.
 
     Returns:
@@ -1600,7 +1944,7 @@ def new_gain_mod(path_files, roi=None, min_points=5):
         all_extension_sum_of_means.extend(extension_sum_of_means)
 
         slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means,
-                                                                      min_points)
+                                                                      n_points)
         if slope is None:
             continue
 
@@ -1648,15 +1992,16 @@ def new_gain_mod(path_files, roi=None, min_points=5):
         extension_sum_of_means = np.array(extension_sum_of_means)
 
         slope, intercept, x_best, y_best, best_indices = best_gain_fit(extension_variances, extension_sum_of_means,
-                                                                      min_points)
+                                                                      n_points)
         if slope is None:
             continue
 
         gains[ext] = 1 / slope
         ax.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {ext}', color="blue", markersize=5)
         fit_line = np.polyval([slope, intercept], extension_variances)
+        #ax.plot(extension_variances[list(best_indices)], extension_sum_of_means[list(best_indices)], 'go', label=f'Fit points', markersize=5)
         ax.plot(extension_variances, fit_line, 'r--', label=f'Fit (Gain={slope:.3f})')
-        gain_text = f"Gain: {1 / slope:.3f} e-/ADU"
+        gain_text = f"Gain: {1 / slope:.3f} ADU/e-"
         ax.text(0.05, 0.95, gain_text, transform=ax.transAxes, fontsize=10, color='red', verticalalignment='top')
         ax.set_title(f"Extensión {ext}")
         ax.set_xlabel("Varianza de la diferencia")
