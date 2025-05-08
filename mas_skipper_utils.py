@@ -259,7 +259,7 @@ def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
     show_fits_image(output_file, index=1, cmap="gray")
     return hdu
     
-def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5):
+def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5, savefigs=False):
     """
     Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling 
     and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit.
@@ -269,6 +269,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_p
         roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
         extension_number (int): Index of the FITS extension (amplifier) to be analyzed.
         n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        savefigs (bool): Default to False.
 
     Returns:
         list of float: A list containing the computed gain value [ADU/e⁻] for the specified extension.
@@ -358,8 +359,13 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_p
         roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
         roi_dir = os.path.dirname(path_files[0])
         fig_rois_path = os.path.join(roi_dir, f"gain_{roi_base}_ext{extension_number}_rois.png")
-        fig_rois.savefig(fig_rois_path)
-        print(f"Saved ROI plot to {fig_rois_path}")
+        if savefigs == True:
+            fig_rois.savefig(fig_rois_path)
+            print(f"Saved ROI plot to {fig_rois_path}")
+        elif savefigs == False:
+            print("Selected to not save images")
+        else:
+            print("Error in Boolean: save_images")
 
     if len(extension_variances) < 4:
         print(f"Not enough points for the extension {extension_number}")
@@ -392,12 +398,18 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_p
     gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
     gain_dir = os.path.dirname(path_files[0])
     fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
-    fig_gain.savefig(fig_gain_path)
-    print(f"Saved gain plot to {fig_gain_path}")
 
+    if savefigs == True:
+        fig_gain.savefig(fig_gain_path)
+        print(f"Saved gain plot to {fig_gain_path}")
+    elif savefigs == False:
+        print("Selected to not save images")
+    else:
+        print("Error in Boolean: save_images")
+    
     return list(gains.values()), len(best_indices)
 
-def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5):
+def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, savefigs = False):
     """
     Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling
     and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit,
@@ -498,8 +510,14 @@ def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number
         roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
         roi_dir = os.path.dirname(path_files[0])
         fig_rois_path = os.path.join(roi_dir, f"gain_{roi_base}_ext{extension_number}_rois.png")
-        fig_rois.savefig(fig_rois_path)
-        print(f"Saved ROI plot to {fig_rois_path}")
+
+        if savefigs == True:
+            fig_rois.savefig(fig_rois_path)
+            print(f"Saved ROI plot to {fig_rois_path}")
+        elif savefigs == False:
+            print("Selected to not save images")
+        else:
+            print("Error in Boolean: save_images")
 
     if len(extension_variances) < n_points:
         print(f"Not enough data points ({len(extension_variances)}) for the extension {extension_number} to perform robust fit.")
@@ -534,12 +552,19 @@ def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number
     gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
     gain_dir = os.path.dirname(path_files[0])
     fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
-    fig_gain.savefig(fig_gain_path)
-    print(f"Saved gain plot to {fig_gain_path}")
+
+    if savefigs == True:
+        fig_gain.savefig(fig_gain_path)
+        print(f"Saved gain plot to {fig_gain_path}")
+    elif savefigs == False:
+        print("Selected to not save images")
+    else:
+        print("Error in Boolean: save_images")
+
 
     return list(gains.values()), num_fit_points
     
-def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5, threshold=0.01):
+def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5, threshold=0.01, savefigs = False):
     """
     Estimates the full-well capacity of a MAS-CCD Skipper extension using dynamic ROI selection.
     The method fits a linear model to the mean counts versus exposure time and detects deviation 
@@ -634,9 +659,15 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
         base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
         output_dir = os.path.dirname(path_files[0])
         fig_rois_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_rois.png")
-        fig_rois.savefig(fig_rois_path)
-        print(f"Saved ROI plot to {fig_rois_path}")
 
+        if savefigs == True:
+            fig_rois.savefig(fig_rois_path)
+            print(f"Saved ROI plot to {fig_rois_path}")
+        elif savefigs == False:
+            print("Selected to not save images")
+        else:
+            print("Error in Boolean: save_images")
+        
     if len(extension_exptimes) < 4:
         print(f"Not enough points for the extension {extension_number}")
         return None
@@ -667,13 +698,19 @@ def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number
 
     # Guardar imagen
     fig_fullwell_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_fullwell.png")
-    fig_counts.savefig(fig_fullwell_path)
-    print(f"Saved Full Well plot to {fig_fullwell_path}")
+
+    if savefigs == True:
+        fig_counts.savefig(fig_fullwell_path)
+        print(f"Saved Full Well plot to {fig_fullwell_path}")
+    elif savefigs == False:
+        print("Selected to not save images")
+    else:
+        print("Error in Boolean: save_images")
 
     return full_well, extension_means, residuals
 
 
-def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, threshold=0.01):
+def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, threshold=0.01, savefigs = False):
     """
     Estimates the full-well capacity of a MAS-CCD Skipper extension using dynamic ROI selection.
     The method fits a robust linear model to the mean counts versus exposure time and detects deviation
@@ -770,8 +807,14 @@ def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_n
         base_name = os.path.splitext(os.path.basename(path_files[0]))[0]
         output_dir = os.path.dirname(path_files[0])
         fig_rois_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_rois.png")
-        fig_rois.savefig(fig_rois_path)
-        print(f"Saved ROI plot to {fig_rois_path}")
+
+        if savefigs == True:
+            fig_rois.savefig(fig_rois_path)
+            print(f"Saved ROI plot to {fig_rois_path}")
+        elif savefigs == False:
+            print("Selected to not save images")
+        else:
+            print("Error in Boolean: save_images")
 
     if len(extension_exptimes) < n_points:
         print(f"Not enough data points ({len(extension_exptimes)}) for the extension {extension_number} to perform robust fit.")
@@ -817,8 +860,15 @@ def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_n
 
     # Guardar imagen
     fig_fullwell_path = os.path.join(output_dir, f"fw_{base_name}_ext{extension_number}_fullwell.png")
-    fig_counts.savefig(fig_fullwell_path)
-    print(f"Saved Full Well plot to {fig_fullwell_path}")
+
+
+    if savefigs == True:
+        fig_counts.savefig(fig_fullwell_path)
+        print(f"Saved Full Well plot to {fig_fullwell_path}")
+    elif savefigs == False:
+        print("Selected to not save images")
+    else:
+        print("Error in Boolean: save_images")
 
     return full_well_mean, extension_means, residuals
     
@@ -1430,25 +1480,29 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, return_mean=False):
+def save_readout_noise(path_files_m,filename="rdn_test.txt",gain=None,roi_base=[545, 635, 540, 640],return_mean=False, save_txt=False):
     """
-    Computes readout noise from bias FITS files, saves it to a file, and optionally saves the mean.
-    Each readout noise value is divided by the corresponding gain value.
+    Computes readout noise from bias FITS files, and optionally saves it to a file.
+    Always returns the noise and (optionally) mean data.
 
     Args:
         path_files_m (list): List of paths to input FITS files (bias images).
         filename (str, optional): Output filename where the RDN values will be saved.
             Defaults to "rdn_test.txt".
-        gain (numpy.ndarray, optional): A 1D numpy array of gain values for each extension.
-            Must have 16 elements. If None, no gain correction is applied.
+        gain (numpy.ndarray, optional): A 1D numpy array of gain values.
             Defaults to None.
-        return_mean (bool, optional): If True, saves the mean of the readout ROI to a separate
-            file (filename_mean). Defaults to False.
+        roi_base (list): Overscan ROI. Defaults to [545, 635, 540, 640].
+        return_mean (bool, optional): If True, also calculates and returns the mean values.
+            Defaults to False.
+        save_txt (bool, optional): If True, saves the noise (and optionally mean)
+            data to a text file. Defaults to False.
 
     Returns:
-        None: The function writes the readout noise and optionally mean values to file(s).
-              Prints messages to the console for success or errors.
+        tuple: A tuple containing:
+               - A list of lists representing the readout noise values.
+               - Optionally, a list of lists representing the mean values (if return_mean is True).
     """
+
     extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
 
     if gain is not None:
@@ -1459,43 +1513,66 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, return_
             print("Error: gain must have 16 elements.")
             return
 
-    print ("Note that using 895 as NROW, for the X axis the min. value is 545 & max. value is 635")
+    print("Note that using 895 as NROW, for the X axis the min. value is 545 & max. value is 635")
+
+    all_noise_data = []
+    all_mean_data = [] if return_mean else None
+
     for path_file in path_files_m:
         rd_noise_all = []
         rd_mean_all = []  # Initialize inside the file loop!
         for idx, ext in enumerate(extensions):
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
-            roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
+            roi = [
+                roi_base[0] + (15 * (ext - 1)),
+                roi_base[1] + (15 * (ext - 1)),
+                roi_base[2],
+                roi_base[3],
+            ]
             try:
-                # Assuming visualize_roi__mean_variance is defined elsewhere and works correctly
-                rd_mean, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
+                # Assuming visualize_roi__mean_variance is defined elsewhere
+                rd_mean, rd_noise = visualize_roi__mean_variance(
+                    path_file, extension_number=idx + 1, roi=roi
+                )
             except Exception as e:
                 print(f"Error processing file {path_file}, extension {ext}: {e}")
-                rd_noise = np.nan  # Or some other appropriate error value
+                rd_noise = np.nan
                 rd_mean = np.nan
             if gain is not None:
-                rd_noise = rd_noise / gain[idx]  # Corrected indexing
+                rd_noise = rd_noise / gain[idx]
                 rd_mean = rd_mean / gain[idx]
             rd_noise_all.append(rd_noise)
-            rd_mean_all.append(rd_mean) # Append the rd_mean
+            if return_mean:
+                rd_mean_all.append(rd_mean)
 
+        all_noise_data.append(rd_noise_all)
+        if return_mean:
+            all_mean_data.append(rd_mean_all)
+
+    # Condicional para escribir a TXT
+    if save_txt:
         try:
-            # Format each number to 5 decimal places in the string
-            string_line_noise = ' '.join(f"{x:.5f}" for x in np.array(rd_noise_all).flatten())
-            with open(filename, 'a') as file_noise: #open file
-                file_noise.write(string_line_noise + '\n')
+            string_line_noise = " ".join(
+                f"{x:.5f}" for x in np.array(all_noise_data).flatten()
+            )
+            with open(filename, "a") as file_noise:
+                file_noise.write(string_line_noise + "\n")
             print(f"Saved noise: {path_file} -> '{filename}'")
             if return_mean:
-                filename_mean = filename.replace(".txt", "_mean.txt") #new filename
-                string_line_mean = ' '.join(f"{x:.2f}" for x in np.array(rd_mean_all).flatten())
-                with open(filename_mean, 'a') as file_mean:
-                    file_mean.write(string_line_mean + '\n')
+                filename_mean = filename.replace(".txt", "_mean.txt")
+                string_line_mean = " ".join(
+                    f"{x:.2f}" for x in np.array(all_mean_data).flatten()
+                )
+                with open(filename_mean, "a") as file_mean:
+                    file_mean.write(string_line_mean + "\n")
                 print(f"Saved mean: {path_file} -> '{filename_mean}'")
 
         except Exception as e:
             print(f"Error writing to file: {e}")
-            return
+            # No hacemos 'return' aquí, porque siempre queremos devolver los datos
 
+    return all_noise_data, all_mean_data
+    
 def gain_plot_all_extensions_single_figure(path_files, roi, n_points=5):
     """
     Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis,
@@ -2023,3 +2100,109 @@ def roi_shifting(roi):
         shifted_roi.append(roi_shifted)
     return shifted_roi
 
+def find_linear_subset(x, y, window_size_initial, error_threshold=0.01, expansion_step=1, max_iter_refine=5):
+    """
+    Detecta el subconjunto más lineal (con un error <= error_threshold) en la
+    sección intermedia de los datos utilizando una ventana deslizante y expansión.
+
+    Args:
+        x (np.ndarray): Array de valores x.
+        y (np.ndarray): Array de valores y.
+        window_size_initial (int): Tamaño inicial de la ventana centrada.
+        error_threshold (float): Umbral máximo de error relativo aceptable.
+        expansion_step (int): Cantidad de puntos para expandir la ventana en cada paso.
+        max_iter_refine (int): Número máximo de iteraciones para refinar el ajuste en cada ventana.
+
+    Returns:
+        tuple: Una tupla conteniendo los índices del subconjunto más lineal encontrado
+               y los errores relativos correspondientes. Retorna (None, None) si no
+               se encuentra ningún subconjunto que cumpla con el umbral.
+
+    Nota: Estoy usando este script para calcular FW, debido a que iteraciones anteriores tenía O(n!),
+    lo cual no es viable con n = 35.
+    """
+    
+    n_total = len(x)
+    if n_total < window_size_initial:
+        return None, None
+
+    best_indices = None
+    min_max_error = np.inf
+
+    # Iterar sobre posibles centros iniciales de la ventana
+    for center in range(window_size_initial // 2, n_total - (window_size_initial // 2)):
+        start = max(0, center - window_size_initial // 2)
+        end = min(n_total, start + window_size_initial)
+        current_indices = np.arange(start, end)
+
+        for _ in range(max_iter_refine):
+            if len(current_indices) < 2:
+                break
+
+            model = LinearRegression()
+            model.fit(x[current_indices].reshape(-1, 1), y[current_indices])
+            y_pred = model.predict(x[current_indices].reshape(-1, 1))
+            residuals = np.abs(y[current_indices] - y_pred) / np.abs(y[current_indices])
+            max_error = np.max(residuals) if residuals.size > 0 else np.inf
+
+            if max_error <= error_threshold:
+                if len(current_indices) > (len(best_indices) if best_indices is not None else 0):
+                    best_indices = current_indices
+                    min_max_error = max_error
+                break  # La ventana actual es suficientemente lineal
+
+            # Intentar refinar los índices (similar a la función anterior)
+            good_indices_local = current_indices[residuals <= error_threshold]
+            if len(good_indices_local) < 2:
+                break
+            current_indices = good_indices_local
+
+    # Fase de expansión de la mejor ventana encontrada
+    if best_indices is not None:
+        current_start = best_indices[0]
+        current_end = best_indices[-1]
+
+        while True:
+            can_expand_start = current_start > 0
+            can_expand_end = current_end < n_total - 1
+            expanded = False
+
+            if can_expand_start:
+                new_start = current_start - expansion_step
+                test_indices = np.arange(new_start, current_end + 1)
+                if len(test_indices) >= 2:
+                    model = LinearRegression()
+                    model.fit(x[test_indices].reshape(-1, 1), y[test_indices])
+                    y_pred = model.predict(x[test_indices].reshape(-1, 1))
+                    residuals = np.abs(y[test_indices] - y_pred) / np.abs(y[test_indices])
+                    if np.max(residuals) <= error_threshold:
+                        current_start = new_start
+                        best_indices = np.arange(current_start, current_end + 1)
+                        expanded = True
+
+            if can_expand_end:
+                new_end = current_end + expansion_step
+                test_indices = np.arange(current_start, new_end + 1)
+                if len(test_indices) >= 2:
+                    model = LinearRegression()
+                    model.fit(x[test_indices].reshape(-1, 1), y[test_indices])
+                    y_pred = model.predict(x[test_indices].reshape(-1, 1))
+                    residuals = np.abs(y[test_indices] - y_pred) / np.abs(y[test_indices])
+                    if np.max(residuals) <= error_threshold:
+                        current_end = new_end
+                        best_indices = np.arange(current_start, current_end + 1)
+                        expanded = True
+
+            if not expanded:
+                break
+
+        if best_indices is not None:
+            model = LinearRegression()
+            model.fit(x[best_indices].reshape(-1, 1), y[best_indices])
+            y_pred = model.predict(x[best_indices].reshape(-1, 1))
+            final_residuals = np.abs(y[best_indices] - y_pred) / np.abs(y[best_indices])
+            return best_indices, final_residuals
+        else:
+            return None, None
+
+    return best_indices, np.abs(y[best_indices] - model.predict(x[best_indices].reshape(-1, 1))) / np.abs(y[best_indices]) if best_indices is not None and len(best_indices) >= 2 else (None, None)
