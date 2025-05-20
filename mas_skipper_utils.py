@@ -185,7 +185,7 @@ def combine_fits_extensions(path_files, extensions, output_file, method='mean'):
         show_fits_image(output_file, index=1, cmap='gray')
 
 
-def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
+def combine_fits_extensions_shifted(path_files, output_file, ext_to_remove):
     """
     Loads, processes, and combines the specified extensions from a FITS file,
     removes specified extensions, averages the remaining images, and saves and displays the result.
@@ -193,7 +193,7 @@ def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
     Args:
         path_files (str): Path to the input FITS file.
         output_file (str): Name of the output FITS file to save.
-        indices_to_remove(array): Indices to remove from the averaging.
+        ext_to_remove(array): Extensions to remove from the averaging.
 
     Returns:
         hdu
@@ -235,7 +235,9 @@ def combine_fits_extensions_shifted(path_files, output_file, indices_to_remove):
     print("Shape of image_collector:", np.shape(image_collector))
 
     # Remove the specified extensions
-    image_collector = np.delete(image_collector, indices_to_remove, axis=0)
+    ext_to_remove = np.array(ext_to_remove, dtype='int')
+    ext_to_remove = ext_to_remove - 1
+    image_collector = np.delete(image_collector, ext_to_remove, axis=0)
 
     print("Post-removal:", len(image_collector))
 
@@ -409,52 +411,37 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_p
     
     return list(gains.values()), len(best_indices)
 
-def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, savefigs = False):
+def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number, n_points=5, savefigs=False, rowcolsROI = [9,8]):
     """
     Computes the gain of a specific extension of a MAS-CCD Skipper image using dynamic ROI sampling
-    and variance-mean analysis. Also saves diagnostic plots of the selected ROI and the gain fit,
-    highlighting the points used in the robust linear fit.
+    and variance-mean analysis. Returns gain value, number of points used, and optionally the gain and ROI figures.
 
     Args:
         path_files (list of str): List of FITS file paths to be processed. Each exposure time must have at least two files.
         roi (list): Region of interest defined as [x_start, x_end, y_start, y_end].
         extension_number (int): Index of the FITS extension (amplifier) to be analyzed.
-        n_points (int, optional): Minimum number of valid data points required to perform the linear fit. Defaults to 5.
+        n_points (int, optional): Minimum number of valid data points required to perform the linear fit.
+        savefigs (bool or str): If True, save gain figure. If "return", return figure objects. If False, do nothing.
 
     Returns:
-        list of float: A list containing the computed gain value [ADU/e⁻] for the specified extension.
-        int: The number of data points used in the final robust fit.
-
-    Raises:
-        None explicitly, but skips extensions or images with invalid data.
-
-    Notes:
-        - For each exposure time, the function uses the first two FITS files to compute the variance of the pixel difference
-          and the sum of the mean counts in the ROI.
-        - A robust linear regression is performed on variance vs. mean-sum using `best_gain_fit_fast()`
-          to estimate the inverse gain (1/slope), iteratively discarding outliers.
-        - Generates and saves two diagnostic plots in the same directory as the FITS files:
-            1. Side-by-side display of all ROIs used.
-            2. Gain fitting curve (Variance vs. Mean-sum) with highlighted points used in the fit.
-        - ROI plots are saved as: `gain_<basename>_ext<extension>_rois.png`
-        - Gain plots are saved as: `gain_<basename>_ext<extension>_gainplot.png`
+        tuple: (gain [float], number of fit points [int], gain_figure or None, roi_figure or None)
     """
+    from collections import defaultdict
+    from astropy.visualization import ZScaleInterval
     gains = {}
     exposure_times = defaultdict(list)
     all_rois = []
 
     for file_path in path_files:
         with fits.open(file_path) as hdulist:
-            exptime = hdulist[0].header.get('EXPTIME', None)
-            if exptime is None:
-                continue
-            exposure_times[exptime].append(file_path)
+            exptime = hdulist[0].header.get('EXPTIME')
+            if exptime is not None:
+                exposure_times[exptime].append(file_path)
 
     extension_variances = []
     extension_sum_of_means = []
-    exposure_time_keys = sorted(exposure_times.keys())
 
-    for exptime in exposure_time_keys:
+    for exptime in sorted(exposure_times.keys()):
         files = exposure_times[exptime]
         if len(files) >= 2:
             file1, file2 = files[:2]
@@ -465,104 +452,96 @@ def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number
                 data2 = hdul2[extension_number].data
                 if data1 is None or data2 is None:
                     continue
-                if roi:
-                    x_start, x_end, y_start, y_end = roi
-                    data1_roi = data1[y_start:y_end, x_start:x_end]
-                    data2_roi = data2[y_start:y_end, x_start:x_end]
-                    diff_data = data2_roi - data1_roi
-                    variance = np.var(diff_data)
-                    sum_of_mean = np.mean(data2_roi) + np.mean(data1_roi)
-
-                    if np.isnan(variance) or np.isnan(sum_of_mean):
-                        continue
-                    extension_variances.append(variance)
-                    extension_sum_of_means.append(sum_of_mean)
-                    all_rois.append((data1_roi, data2_roi, file1, file2))
-
-    # ---- PLOT ROIs ----
-    if len(all_rois) > 0:
-        rows, cols = 9, 8 # Adjusted for potential more ROIs. It was
-        fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
-        axes = axes.flatten()
-
-        for i, (data1_roi, data2_roi, file1, file2) in enumerate(all_rois):
-            zlow1, zhigh1 = ZScaleInterval().get_limits(data1_roi)
-            axes[2*i].imshow(data1_roi, cmap="gray", clim=(zlow1, zhigh1), extent=[x_start, x_end, y_end, y_start])
-            axes[2*i].invert_yaxis()
-            contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
-            exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
-            axes[2*i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
-            axes[2*i].text(0.95, 0.05, f"{contid1}", transform=axes[2*i].transAxes, fontsize=8,
-                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
-
-            zlow2, zhigh2 = ZScaleInterval().get_limits(data2_roi)
-            axes[2*i+1].imshow(data2_roi, cmap="gray", clim=(zlow2, zhigh2), extent=[x_start, x_end, y_end, y_start])
-            axes[2*i+1].invert_yaxis()
-            contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
-            exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
-            axes[2*i+1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
-            axes[2*i+1].text(0.95, 0.05, f"{contid2}", transform=axes[2*i+1].transAxes, fontsize=8,
-                                        verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
-
-        fig_rois.tight_layout()
-
-        # Guardar ROI plot
-        roi_base = os.path.splitext(os.path.basename(path_files[0]))[0]
-        roi_dir = os.path.dirname(path_files[0])
-        fig_rois_path = os.path.join(roi_dir, f"gain_{roi_base}_ext{extension_number}_rois.png")
-
-        if savefigs == True:
-            fig_rois.savefig(fig_rois_path)
-            print(f"Saved ROI plot to {fig_rois_path}")
-        elif savefigs == False:
-            print("Selected to not save images")
-        else:
-            print("Error in Boolean: save_images")
+                x0, x1, y0, y1 = roi
+                roi1 = data1[y0:y1, x0:x1]
+                roi2 = data2[y0:y1, x0:x1]
+                var = np.var(roi2 - roi1)
+                mean_sum = np.mean(roi2) + np.mean(roi1)
+                if not np.isnan(var) and not np.isnan(mean_sum):
+                    extension_variances.append(var)
+                    extension_sum_of_means.append(mean_sum)
+                    all_rois.append((roi1, roi2, file1, file2))
 
     if len(extension_variances) < n_points:
-        print(f"Not enough data points ({len(extension_variances)}) for the extension {extension_number} to perform robust fit.")
-        return None, 0
+        print(f"Not enough data points ({len(extension_variances)}) for extension {extension_number}.")
+        return None, 0, None, None
 
-    extension_variances = np.array(extension_variances)
-    extension_sum_of_means = np.array(extension_sum_of_means)
+    x = np.array(extension_variances)
+    y = np.array(extension_sum_of_means)
 
-    slope, intercept, x_best, y_best, best_indices = best_gain_fit_fast(extension_variances, extension_sum_of_means, n_points)
-
+    slope, intercept, x_best, y_best, best_indices = best_gain_fit_fast(x, y, n_points=n_points)
     if slope is None:
-        print(f"Not enough valid data points after robust fitting for extension {extension_number}.")
-        return None, 0
+        print(f"Not enough valid points after robust fit for extension {extension_number}.")
+        return None, 0, None, None
 
-    gains[extension_number] = 1 / slope
+    gain = 1 / slope
     num_fit_points = len(best_indices)
 
-    # ---- PLOT GANANCIA ----
+    # Plot gain fit
     fig_gain, ax_gain = plt.subplots(figsize=(8, 6))
-    ax_gain.plot(extension_variances, extension_sum_of_means, 'o', label=f'Data Points (Ext {extension_number})', color="blue", markersize=5)
-    fit_line = np.polyval([slope, intercept], extension_variances)
-    ax_gain.plot(extension_variances[best_indices], extension_sum_of_means[best_indices], 'go', label=f'Points Used in Fit ({num_fit_points})')
-    ax_gain.plot(x_best, fit_line, 'r--', label=f'Robust Linear Fit')
-    ax_gain.text(0.05, 0.95, f"Gain: {1 / slope:.3f} ADU/e-", transform=ax_gain.transAxes, fontsize=10, color='red', verticalalignment='top')
+    ax_gain.plot(x, y, 'o', label=f'All Points ext {extension_number}', color='blue')
+    ax_gain.plot(x[best_indices], y[best_indices], 'go', label='Fit Points')
+    fit_line = np.polyval([slope, intercept], x[best_indices])
+    ax_gain.plot(x_best, fit_line, 'r--', label='Robust Fit')
+    ax_gain.text(0.05, 0.95, f"Gain: {gain:.3f} ADU/e-", transform=ax_gain.transAxes, fontsize=10,
+                 color='red', verticalalignment='top')
     ax_gain.set_xlabel("Variance of Pixel Difference (ADU²)")
     ax_gain.set_ylabel("Sum of Means (ADU)")
     ax_gain.grid()
     ax_gain.legend()
     fig_gain.tight_layout()
 
-    # Guardar plot de ganancia
-    gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
-    gain_dir = os.path.dirname(path_files[0])
-    fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
+    # Plot ROIs
+    fig_rois = None
+    if all_rois:
+        rows, cols = rowcolsROI[0], rowcolsROI[1]  # It was 6,4
+        fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
+        axes = axes.flatten()
 
-    if savefigs == True:
+        for i, (roi1_data, roi2_data, file1, file2) in enumerate(all_rois):
+            zlow1, zhigh1 = ZScaleInterval().get_limits(roi1_data)
+            axes[2 * i].imshow(roi1_data, cmap="gray", clim=(zlow1, zhigh1), extent=[roi[0], roi[1], roi[3], roi[2]])
+            axes[2 * i].invert_yaxis()
+            contid1 = fits.open(file1)[extension_number].header.get('CONTID', 'N/A')
+            exptime1 = fits.open(file1)[0].header.get('EXPTIME', 'N/A')
+            axes[2 * i].set_title(f"ROI {os.path.basename(file1)}, EXPTIME={exptime1}", fontsize=8)
+            axes[2 * i].text(0.95, 0.05, f"{contid1}", transform=axes[2 * i].transAxes, fontsize=8,
+                             verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+            zlow2, zhigh2 = ZScaleInterval().get_limits(roi2_data)
+            axes[2 * i + 1].imshow(roi2_data, cmap="gray", clim=(zlow2, zhigh2), extent=[roi[0], roi[1], roi[3], roi[2]])
+            axes[2 * i + 1].invert_yaxis()
+            contid2 = fits.open(file2)[extension_number].header.get('CONTID', 'N/A')
+            exptime2 = fits.open(file2)[0].header.get('EXPTIME', 'N/A')
+            axes[2 * i + 1].set_title(f"ROI {os.path.basename(file2)}, EXPTIME={exptime2}", fontsize=8)
+            axes[2 * i + 1].text(0.95, 0.05, f"{contid2}", transform=axes[2 * i + 1].transAxes, fontsize=8,
+                             verticalalignment='bottom', horizontalalignment='right', alpha=0.8, color="red")
+
+        fig_rois.tight_layout()
+
+    if savefigs is True:
+        gain_base = os.path.splitext(os.path.basename(path_files[0]))[0]
+        gain_dir = os.path.dirname(path_files[0])
+        fig_gain_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_gainplot.png")
+        fig_rois_path = os.path.join(gain_dir, f"gain_{gain_base}_ext{extension_number}_rois.png")
         fig_gain.savefig(fig_gain_path)
+        if fig_rois:
+            fig_rois.savefig(fig_rois_path)
         print(f"Saved gain plot to {fig_gain_path}")
-    elif savefigs == False:
-        print("Selected to not save images")
+        if fig_rois:
+            print(f"Saved ROI plot to {fig_rois_path}")
+        plt.close(fig_gain)
+        if fig_rois:
+            plt.close(fig_rois)
+        return [gain], num_fit_points, None, None
+    elif savefigs == "return":
+        return [gain], num_fit_points, fig_gain, fig_rois
     else:
-        print("Error in Boolean: save_images")
-
-
-    return list(gains.values()), num_fit_points
+        print("Selected not to save or return figures.")
+        plt.close(fig_gain)
+        if fig_rois:
+            plt.close(fig_rois)
+        return [gain], num_fit_points, None, None
     
 def new_full_well_dynamic_ROI_single_extension(path_files, roi, extension_number, n_points=5, threshold=0.01, savefigs = False):
     """
@@ -874,10 +853,7 @@ def new_full_well_dynamic_ROI_single_extension_fast(path_files, roi, extension_n
     
 def visualize_roi__mean_variance(file_path, roi, extension_number):
     """
-    Displays a region of interest (ROI) from a FITS image and computes its mean and standard deviation.
-
-    This function extracts a rectangular ROI from a given extension in a FITS file, displays it using
-    a ZScale stretch, and prints the mean and standard deviation of the pixel values within the ROI.
+    Extracts ROI statistics and returns a Matplotlib figure of the ROI.
 
     Args:
         file_path (str): Path to the input FITS file.
@@ -888,45 +864,39 @@ def visualize_roi__mean_variance(file_path, roi, extension_number):
         tuple:
             float: Mean pixel value within the ROI.
             float: Standard deviation of pixel values within the ROI.
-
-    Raises:
-        FileNotFoundError: If the specified FITS file cannot be found.
-        Exception: For any other unexpected error.
-
-    Notes:
-        - The ROI image is displayed using `matplotlib` with intensity scaling based on ZScale.
-        - The Y-axis is flipped to follow astronomical image convention.
-        - Pixel statistics are printed in the figure title for quick interpretation.
+            matplotlib.figure.Figure: The Matplotlib figure object of the ROI.
     """
     try:
         with fits.open(file_path) as hdul:
             data = hdul[extension_number].data
             if data is None:
                 print("Error: No se encontraron datos en la extensión especificada.")
-                return
+                return np.nan, np.nan, None
 
             x_start, x_end, y_start, y_end = roi
             roi_data = data[y_start:y_end, x_start:x_end]
             mean_counts = np.mean(roi_data)
             std_counts = np.std(roi_data)
-            
+
             zscale = ZScaleInterval()
             zlow, zhigh = zscale.get_limits(roi_data)
 
-            plt.figure(figsize=(8, 6))
-            plt.imshow(roi_data, cmap='gray', clim=(zlow, zhigh), extent=[x_start, x_end, y_end, y_start])
-            plt.colorbar(label='Cuentas')
-            plt.gca().invert_yaxis() # Invertir el eje Y
-            plt.title(f'ROI y Media de Cuentas: {mean_counts:.2f}, STD: {std_counts}')
-            plt.xlabel('X')
-            plt.ylabel('Y')
-            plt.show()
+            fig, ax = plt.subplots(figsize=(8, 6))
+            im = ax.imshow(roi_data, cmap='gray', clim=(zlow, zhigh), extent=[x_start, x_end, y_end, y_start])
+            plt.colorbar(im, label='Cuentas', ax=ax)
+            ax.invert_yaxis() # Invertir el eje Y
+            ax.set_title(f'ROI y Media de Cuentas: {mean_counts:.2f}, STD: {std_counts}, EXT: {extension_number}')
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+
+            return mean_counts, std_counts, fig
 
     except FileNotFoundError:
         print(f"Error: No se encontró el archivo {file_path}")
+        return np.nan, np.nan, None
     except Exception as e:
         print(f"Ocurrió un error: {e}")
-    return mean_counts, std_counts
+        return np.nan, np.nan, None
     
 def overscan_correction(path_files, output_file, method='mean'):
     """
@@ -1480,47 +1450,27 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         print(f"Error al procesar el archivo {archivo_fits}: {e}")
         return None
 
-def save_readout_noise(path_files_m,filename="rdn_test.txt",gain=None,roi_base=[545, 635, 540, 640],return_mean=False, save_txt=False):
+
+def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, roi_base=[545, 635, 540, 640], return_mean=False, save_txt=False, saveplots=False):
     """
-    Computes readout noise from bias FITS files, and optionally saves it to a file.
-    Always returns the noise and (optionally) mean data.
-
-    Args:
-        path_files_m (list): List of paths to input FITS files (bias images).
-        filename (str, optional): Output filename where the RDN values will be saved.
-            Defaults to "rdn_test.txt".
-        gain (numpy.ndarray, optional): A 1D numpy array of gain values.
-            Defaults to None.
-        roi_base (list): Overscan ROI. Defaults to [545, 635, 540, 640].
-        return_mean (bool, optional): If True, also calculates and returns the mean values.
-            Defaults to False.
-        save_txt (bool, optional): If True, saves the noise (and optionally mean)
-            data to a text file. Defaults to False.
-
-    Returns:
-        tuple: A tuple containing:
-               - A list of lists representing the readout noise values.
-               - Optionally, a list of lists representing the mean values (if return_mean is True).
+    Computes readout noise and optionally returns/saves plots.
     """
-
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
 
     if gain is not None:
-        if not isinstance(gain, np.ndarray):
-            print("Error: gain must be a numpy array.")
-            return
         if len(gain) != 16:
-            print("Error: gain must have 16 elements.")
-            return
+            print("Error: gain must be a numpy array of 16 elements.")
+            return None, None, None, None
 
     print("Note that using 895 as NROW, for the X axis the min. value is 545 & max. value is 635")
 
     all_noise_data = []
     all_mean_data = [] if return_mean else None
+    all_roi_figs = [] if saveplots == "return" else None # Store ROI figures here
 
     for path_file in path_files_m:
         rd_noise_all = []
-        rd_mean_all = []  # Initialize inside the file loop!
+        rd_mean_all = []
         for idx, ext in enumerate(extensions):
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
             roi = [
@@ -1530,48 +1480,61 @@ def save_readout_noise(path_files_m,filename="rdn_test.txt",gain=None,roi_base=[
                 roi_base[3],
             ]
             try:
-                # Assuming visualize_roi__mean_variance is defined elsewhere
-                rd_mean, rd_noise = visualize_roi__mean_variance(
+                rd_mean, rd_noise, roi_fig = visualize_roi__mean_variance(
                     path_file, extension_number=idx + 1, roi=roi
                 )
             except Exception as e:
                 print(f"Error processing file {path_file}, extension {ext}: {e}")
                 rd_noise = np.nan
                 rd_mean = np.nan
+                roi_fig = None
+
             if gain is not None:
                 rd_noise = rd_noise / gain[idx]
                 rd_mean = rd_mean / gain[idx]
+
             rd_noise_all.append(rd_noise)
             if return_mean:
                 rd_mean_all.append(rd_mean)
+            if saveplots == "return":
+                all_roi_figs.append(roi_fig) # Collect the returned figure
 
         all_noise_data.append(rd_noise_all)
         if return_mean:
             all_mean_data.append(rd_mean_all)
 
-    # Condicional para escribir a TXT
-    if save_txt:
-        try:
-            string_line_noise = " ".join(
-                f"{x:.5f}" for x in np.array(all_noise_data).flatten()
-            )
-            with open(filename, "a") as file_noise:
-                file_noise.write(string_line_noise + "\n")
-            print(f"Saved noise: {path_file} -> '{filename}'")
-            if return_mean:
-                filename_mean = filename.replace(".txt", "_mean.txt")
-                string_line_mean = " ".join(
-                    f"{x:.2f}" for x in np.array(all_mean_data).flatten()
+# Conditional for writing to TXT
+        if save_txt:
+            try:
+                string_line_noise = " ".join(
+                    f"{x:.5f}" for x in np.array(all_noise_data).flatten()
                 )
-                with open(filename_mean, "a") as file_mean:
-                    file_mean.write(string_line_mean + "\n")
-                print(f"Saved mean: {path_file} -> '{filename_mean}'")
+                with open(filename, "a") as file_noise:
+                    file_noise.write(string_line_noise + "\n")
+                print(f"Saved noise: {path_file} -> '{filename}'")
+                if return_mean:
+                    filename_mean = filename.replace(".txt", "_mean.txt")
+                    string_line_mean = " ".join(
+                        f"{x:.2f}" for x in np.array(all_mean_data).flatten()
+                    )
+                    with open(filename_mean, "a") as file_mean:
+                        file_mean.write(string_line_mean + "\n")
+                    print(f"Saved mean: {path_file} -> '{filename_mean}'")
 
-        except Exception as e:
-            print(f"Error writing to file: {e}")
-            # No hacemos 'return' aquí, porque siempre queremos devolver los datos
+                if saveplots is True:
+                    print("Saving readout noise ROI plots (implementation needed)")
 
-    return all_noise_data, all_mean_data
+            except Exception as e:
+                print(f"Error writing to file: {e}")
+
+    if return_mean and saveplots == "return":
+        return all_noise_data, all_mean_data, all_roi_figs, None # Returning ROI figs as noise figs
+    elif saveplots == "return":
+        return all_noise_data, None, all_roi_figs, None # Returning ROI figs as noise figs
+    elif return_mean:
+        return all_noise_data, all_mean_data, None, None
+    else:
+        return all_noise_data, None, None, None
     
 def gain_plot_all_extensions_single_figure(path_files, roi, n_points=5):
     """
@@ -1669,8 +1632,7 @@ def calculate_gain_all_extensions(path_files, roi=None, n_points=5, plot_individ
     """
     Computes the gain for all 16 extensions of MAS-CCD Skipper data using variance-mean analysis.
     Optionally plots the gain fit for each extension, either in individual plots or a single 4x4 grid.
-    The extensions are processed in the order [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7],
-    and the ROI is updated for each extension.
+    The extensions are processed in the fixed order and the ROI is updated for each extension.
 
     Args:
         path_files (list of str): List of FITS file paths. Each exposure time must have at least two files.
@@ -1696,7 +1658,7 @@ def calculate_gain_all_extensions(path_files, roi=None, n_points=5, plot_individ
 
     gains = {}
     all_extension_data = {}  # To store data for plotting
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
 
     for idx, ext in enumerate(extensions):
         variances = []
@@ -1793,32 +1755,12 @@ def calculate_gain_all_extensions(path_files, roi=None, n_points=5, plot_individ
 
     return gains
 
-#########################
-    #########################
-###################################################
-    # for path_file in path_files_m:
-    #     rd_noise_all = []
-    #     for idx, ext in enumerate(extensions):
-    #         print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
-    #         roi = [545 + (15 * (ext - 1)), 635 + (15 * (ext - 1)), 540, 640]
-    #         try:
-    #             # Assuming visualize_roi__mean_variance is defined elsewhere and works correctly
-    #             _, rd_noise = visualize_roi__mean_variance(path_file, extension_number=idx + 1, roi=roi)
-    #         except Exception as e:
-    #             print(f"Error processing file {path_file}, extension {ext}: {e}")
-    #             rd_noise = np.nan  # Or some other appropriate error value
-    #         if gain is not None:
-    #             rd_noise = rd_noise / gain[idx]  # Corrected indexing
-    #         rd_noise_all.append(rd_noise)
-###################################################
-    #########################
-#########################
 def new_gain(path_files, roi, n_points=5): 
     """
     Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
     NOTA: EL ROI ES FIJO. ESTOY USANDO UN ROI COMÜN PARA LAS 16 EXTENSIONES QUE ES DENTRO DE 260,440 EN X*
     """
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
     
     gains = {}
     exposure_times = defaultdict(list)
@@ -1959,7 +1901,7 @@ def new_gain_mod(path_files, roi=None, n_points=5):
     if roi is None:
         roi = [545, 635, 540, 640]  # ROI inicial por defecto.
 
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
     gains = {}
     exposure_times = defaultdict(list)
 
@@ -2092,7 +2034,7 @@ def new_gain_mod(path_files, roi=None, n_points=5):
     return gains_list
 
 def roi_shifting(roi):
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 8, 3, 9, 6, 4, 7]
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
     shifted_roi = []
     for idx,ext in enumerate(extensions):
         x_start, x_end, y_start, y_end = [roi[0] + (15 * (ext - 1)), roi[1] + (15 * (ext - 1)), roi[2], roi[3]]  # Moving ROI
