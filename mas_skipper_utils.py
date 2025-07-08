@@ -71,7 +71,7 @@ def generate_output_paths(input_paths, suffix="_corrected"):
         output_paths.append(output_path)
     return output_paths
     
-def show_fits_image(filename, index = 1, cmap="gray"):
+def show_fits_image(filename, index = 1, cmap="gray", figsize=(16,9)):
     """
     Displays a single extension of a FITS file as an image.
 
@@ -79,9 +79,9 @@ def show_fits_image(filename, index = 1, cmap="gray"):
         filename (str): The path to the FITS file.
         index (int, optional): The extension index to display. Defaults to 1.
         cmap (str, optional): The colormap to use for the image. Defaults to 'hot'.
-
+        figsize (tuple, optional): The figsize to display in x,y order. Defaults to (16,9).
     Returns:
-        None
+        image_data (2d-array): The ADU counts of the image. 
 
     Example:
         >>> show_fits_image("example.fits", index=2, cmap="viridis")
@@ -90,20 +90,38 @@ def show_fits_image(filename, index = 1, cmap="gray"):
         The image intensity is scaled using `astropy.visualization.ZScaleInterval` 
         for optimal visualization. A colorbar is added to indicate the intensity range.
     """
-    with fits.open(filename) as hdulist:
-        image_data = hdulist[index].data
+    if isinstance(filename, str): #This check if filename is a path to a fits file or data array itself.
+        with fits.open(filename) as hdulist:
+            image_data = hdulist[index].data
+        zscale = ZScaleInterval()
+        zlow, zhigh = zscale.get_limits(image_data)
 
-    zscale = ZScaleInterval()
-    zlow, zhigh = zscale.get_limits(image_data)
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(image_data, cmap=cmap, clim=(zlow, zhigh))
+        # Create colorbar with same height as the y-axis
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="1.5%", pad=0.05)
+        fig = ax.figure
+        fig.colorbar(im, cax=cax)
+        ax.invert_yaxis() #added this line
+        
+        return image_data
+    elif isinstance(filename, np.ndarray):
 
-    fig, ax = plt.subplots(figsize=(16, 9))
-    im = ax.imshow(image_data, cmap=cmap, clim=(zlow, zhigh))
-    # Create colorbar with same height as the y-axis
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="1.5%", pad=0.05)
-    fig = ax.figure
-    fig.colorbar(im, cax=cax)
-    ax.invert_yaxis() #added this line
+        zscale = ZScaleInterval()
+        zlow, zhigh = zscale.get_limits(filename)
+
+        fig, ax = plt.subplots(figsize=figsize)
+        im = ax.imshow(filename, cmap=cmap, clim=(zlow, zhigh))
+        # Create colorbar with same height as the y-axis
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="1.5%", pad=0.05)
+        fig = ax.figure
+        fig.colorbar(im, cax=cax)
+        ax.invert_yaxis() #added this line
+        return filename
+    else:
+        print(f"Filename: {filename} is not a str nor data type")
 
 def show_multi_fits_image(filename):
     """
@@ -234,10 +252,11 @@ def combine_fits_extensions_shifted(path_files, output_file, ext_to_remove):
     print("Pre-removal:", len(image_collector))
     print("Shape of image_collector:", np.shape(image_collector))
 
-    # Remove the specified extensions
-    ext_to_remove = np.array(ext_to_remove, dtype='int')
-    ext_to_remove = ext_to_remove - 1
-    image_collector = np.delete(image_collector, ext_to_remove, axis=0)
+    if ext_to_remove is not None:
+        # Remove the specified extensions
+        ext_to_remove = np.array(ext_to_remove, dtype='int')
+        ext_to_remove = ext_to_remove - 1  
+        image_collector = np.delete(image_collector, ext_to_remove, axis=0)
 
     print("Post-removal:", len(image_collector))
 
@@ -384,7 +403,7 @@ def new_gain_dynamic_ROI_single_extension(path_files, roi, extension_number, n_p
     gains[extension_number] = 1 / slope
 
     # ---- PLOT GANANCIA ----
-    fig_gain, ax_gain = plt.subplots(figsize=(8, 6))
+    fig_gain, ax_gain = plt.subplots(figsize=(18, 9))
     ax_gain.plot(extension_variances, extension_sum_of_means, 'o', label=f'Ext {extension_number}', color="blue", markersize=5)
     fit_line = np.polyval([slope, intercept], extension_variances)
     #ax_gain.plot(extension_variances[list(best_indices)], extension_sum_of_means[list(best_indices)], 'go', label=f'Fit points')
@@ -495,7 +514,7 @@ def new_gain_dynamic_ROI_single_extension_fast(path_files, roi, extension_number
     fig_rois = None
     if all_rois:
         rows, cols = rowcolsROI[0], rowcolsROI[1]  # It was 6,4
-        fig_rois, axes = plt.subplots(rows, cols, figsize=(20, 16))
+        fig_rois, axes = plt.subplots(rows, cols, figsize=(16, 10)) #It was 20,16
         axes = axes.flatten()
 
         for i, (roi1_data, roi2_data, file1, file2) in enumerate(all_rois):
@@ -897,76 +916,71 @@ def visualize_roi__mean_variance(file_path, roi, extension_number):
     except Exception as e:
         print(f"Ocurrió un error: {e}")
         return np.nan, np.nan, None
-    
-def overscan_correction(path_files, output_file, method='mean'):
-    """
-    Applies overscan correction to all 16 extensions in a FITS file.
 
-    This function reads a multi-extension FITS file, calculates the overscan level in each extension,
-    and subtracts it to correct for electronic bias. The corrected image is saved to a new FITS file.
+def overscan_correction_combined(file, output_file, roi_vector, method='mean'):
+    """
+    Applies overscan correction to a multi-extension FITS file using individual ROIs per extension.
 
     Args:
-        path_files (str): Path to the input FITS file.
-        output_file (str): Path to save the corrected FITS file.
-        method (str, optional): Overscan subtraction method.
-            - 'mean': Use the mean value of the overscan region.
-            - 'poly': Fit a 2nd-degree polynomial to the overscan region (column-wise).
+        file (str): Path to input FITS file.
+        output_file (str): Path to save corrected FITS file.
+        roi_vector (list): List of ROIs, one per extension, each as [col_start, col_end, row_start, row_end].
+        method (str): 'mean' (default) or 'poly' for polynomial fit.
 
     Returns:
-        None
-
-    Raises:
-        ValueError: If an invalid method is provided.
-
-    Notes:
-        - The overscan region is inferred from the 'BIASSEC' keyword in the FITS header.
-        - The function assumes the file contains 16 image extensions.
-        - Extensions with missing data will be skipped.
+        None. Writes a corrected FITS file.
     """
-    # Get overscan (biassec) from the FITS header
-    hdul = fits.open(path_files)
-    hdr = hdul[1].header  # Assuming the trimsec and biassec are in the first extension header
-    biassec = hdr['BIASSEC']
-    biassec_list = list(map(int, biassec.strip("[]").replace(",", ":").split(":")))
-    overscan_width = biassec_list[1] - biassec_list[0]  # Calculate the width of the overscan.
-    print(f"Overscan width: {overscan_width}")
-    hdul.close()
 
-    with fits.open(path_files, mode='readonly') as hdul:
-        # Copy the original primary header
+    if len(roi_vector) < 1:
+        raise ValueError("ROI vector must contain at least one region.")
+
+    with fits.open(file, mode='readonly') as hdul:
         corrected_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul[0].header.copy())])
 
-        for ext in range(1, 17):  # Iterate through the 16 extensions
-            if ext >= len(hdul) or hdul[ext].data is None:
-                print(f"Warning: Extension {ext} does not exist or has no data.")
+        for ext in range(1, len(hdul)):
+            if hdul[ext].data is None:
+                print(f"⚠️ Warning: Extension {ext} has no data. Skipping.")
                 continue
 
-            data = hdul[ext].data.astype(float)  # Convert to float for precision
-            overscan_region = data[:, -overscan_width:]  # Last `overscan_width` pixels
+            if ext - 1 >= len(roi_vector):
+                print(f"⚠️ Warning: No ROI defined for extension {ext}. Skipping.")
+                continue
+
+            data = hdul[ext].data.astype(float)
+            col_start, col_end, row_start, row_end = roi_vector[ext - 1]
+
+            # Verifica los límites
+            if (row_end > data.shape[0]) or (col_end > data.shape[1]):
+                print(f"⚠️ ROI out of bounds for extension {ext}. Skipping.")
+                corrected_hdul.append(fits.ImageHDU(data=data, header=hdul[ext].header))
+                continue
+
+            overscan_region = data[row_start:row_end, col_start:col_end]
+
+            if overscan_region.size == 0:
+                print(f"⚠️ Overscan region empty for extension {ext}. Skipping correction.")
+                corrected_hdul.append(fits.ImageHDU(data=data, header=hdul[ext].header))
+                continue
 
             if method == 'mean':
                 overscan_value = np.mean(overscan_region)
             elif method == 'poly':
-                x = np.arange(overscan_region.shape[1])
+                x = np.arange(col_end - col_start)
                 y = np.mean(overscan_region, axis=0)
                 poly_coeffs = np.polyfit(x, y, deg=2)
                 poly_fit = np.polyval(poly_coeffs, x)
                 overscan_value = np.mean(poly_fit)
             else:
-                raise ValueError("Invalid method. Use 'mean' or 'poly'.")
+                raise ValueError("Method must be 'mean' or 'poly'.")
 
-            print(f"Overscan mean before correction (ext {ext}): {overscan_value}")
             corrected_data = data - overscan_value
-            post_region = corrected_data[:, -overscan_width:]
-            print(f"Overscan mean after correction (ext {ext}): {np.mean(post_region)}")
+            corrected_hdul.append(fits.ImageHDU(data=corrected_data, header=hdul[ext].header))
 
-            corrected_hdu = fits.ImageHDU(data=corrected_data, header=hdul[ext].header)
-            corrected_hdul.append(corrected_hdu)
+            print(f"✅ Ext {ext}: Overscan = {overscan_value:.3f}")
 
-        corrected_hdul.writeto(output_file, overwrite=True)
-        print(f"Overscan-corrected FITS saved as: {output_file}")
-
-
+    corrected_hdul.writeto(output_file, overwrite=True)
+    print(f"✅ Saved corrected file: {output_file}")
+        
 def bias_subtraction(path_files, master_bias_file, output_file):
     """
     Applies bias subtraction to all 16 extensions in a FITS file.
@@ -1020,68 +1034,6 @@ def bias_subtraction(path_files, master_bias_file, output_file):
         corrected_hdul.writeto(output_file, overwrite=True)
         print(f"Bias-corrected FITS saved as: {output_file}")
         
-def calculate_background_noise(file_path, extension=1, roi=None):
-    """
-    Calculates the background noise of a FITS image by standard deviation.
-
-    Args:
-        file_path (str): path of the FITS file.
-        extension (int): Index of the extension to analyze.
-        roi (tuple): Region of interest in format (xmin, xmax, ymin, ymax). If None, uses the whole image.
-
-    Returns:
-        float: estimated image noise (standard deviation in ADU).
-    """
-    with fits.open(file_path) as hdulist:
-        data = hdulist[extension].data
-        if data is None:
-            raise ValueError(f"There is no data in the extension {extension}.")
-
-        if roi:
-            xmin, xmax, ymin, ymax = roi
-            data = data[ymin:ymax, xmin:xmax]
-        noise = np.std(data)
-        return noise
-
-def calculate_overscan_noise(path_files, extension=1, method='std'):
-    """
-    Calcula el ruido del sobreescaneo en una extensión de un archivo FITS.
-
-    Args:
-        path_files (str): Ruta al archivo FITS.
-        extension (int, optional): Número de la extensión a procesar. Por defecto es 1.
-        method (str, optional): Método para calcular el ruido. 'std' para la desviación estándar,
-                                'var' para la varianza. Por defecto es 'std'.
-
-    Returns:
-        float: El ruido del sobreescaneo.
-    """
-    with fits.open(path_files, mode='readonly') as hdul:
-        if extension >= len(hdul) or hdul[extension].data is None:
-            raise ValueError(f"Extensión {extension} no existe o no tiene datos.")
-
-        # Obtiene el BIASSEC del encabezado
-        hdr = hdul[extension].header #access the header of the extension.
-        biassec = hdr['BIASSEC']
-        psamp = int(hdr["PSAMP"])
-        biassec_list = list(map(int, biassec.strip("[]").replace(",", ":").split(":")))
-        overscan_start = biassec_list[0]
-        overscan_end = biassec_list[1]
-
-        # Extrae la región de sobreescaneo
-        data = hdul[extension].data.astype(float)
-        overscan_region = data[:, overscan_start:overscan_end]
-
-        # Calcula el ruido
-        if method == 'std':
-            noise = np.std(overscan_region)
-        elif method == 'var':
-            noise = np.var(overscan_region)
-        else:
-            raise ValueError("Método inválido. Usa 'std' o 'var'.")
-
-        return noise / psamp
-
 def plot_variance_vs_sum(path_files, roi):
     """
     Grafica V(M1' - M1) vs M1 + M1' para cada una de las 16 extensiones del MAS-CCD Skipper.
@@ -1313,7 +1265,6 @@ def best_gain_fit_fast(x, y, n_points=5, clip_sigma=0.01, max_iter=10):
         return slope, intercept, x_best, y_best, indices
     else:
         return None, None, None
-
     
 def plot_exposure_time_vs_mean_linear_fit(path_files, roi=None, threshold=0.01, n_points=5):
     """
@@ -1451,26 +1402,48 @@ def calculate_cte(archivo_fits, numero_linea, roi=None, ext=1):
         return None
 
 
-def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, roi_base=[545, 635, 540, 640], return_mean=False, save_txt=False, saveplots=False):
+def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, roi_base=[545, 635, 540, 640],
+                       return_mean=False, save_txt=False, saveplots=False):
     """
     Computes readout noise and optionally returns/saves plots.
+
+    Args:
+        path_files_m (list): Lista de archivos FITS.
+        filename (str): Nombre del archivo de salida para guardar ruido.
+        gain (array): Ganancias por extensión.
+        roi_base (list): ROI base en formato [x1, x2, y1, y2].
+        return_mean (bool): Si devuelve los promedios.
+        save_txt (bool): Si guarda los resultados en .txt.
+        saveplots (bool or "return"): Si guarda o devuelve las figuras de ROI.
+
+    Returns:
+        all_noise_data: lista con ruido por extensión para cada imagen.
+        all_mean_data: (opcional) lista con medias por extensión.
+        all_roi_figs: (opcional) lista de figuras.
     """
     extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
 
     if gain is not None:
-        if len(gain) != 16:
-            print("Error: gain must be a numpy array of 16 elements.")
+        try:
+            gain = np.array(gain, dtype=float).flatten()
+        except Exception as e:
+            print(f"Error converting gain to numpy array: {e}.")
             return None, None, None, None
 
-    print("Note that using 895 as NROW, for the X axis the min. value is 545 & max. value is 635")
+        if len(gain) != len(extensions):
+            print(f"Error: gain must be an array of {len(extensions)} elements after flattening.")
+            return None, None, None, None
+
+    print("Note: using 895 as NROW. X axis min = 545, max = 635.")
 
     all_noise_data = []
     all_mean_data = [] if return_mean else None
-    all_roi_figs = [] if saveplots == "return" else None # Store ROI figures here
+    all_roi_figs = [] if saveplots == "return" else None
 
     for path_file in path_files_m:
         rd_noise_all = []
         rd_mean_all = []
+
         for idx, ext in enumerate(extensions):
             print(f"File: {path_file}, EXT index: {idx + 1}, MAS EXT: {ext}")
             roi = [
@@ -1489,48 +1462,52 @@ def save_readout_noise(path_files_m, filename="rdn_test.txt", gain=None, roi_bas
                 rd_mean = np.nan
                 roi_fig = None
 
+            # Gain correction
             if gain is not None:
-                rd_noise = rd_noise / gain[idx]
-                rd_mean = rd_mean / gain[idx]
+                if gain[idx] is not None:
+                    rd_noise = rd_noise / gain[idx]
+                    rd_mean = rd_mean / gain[idx]
+                else:
+                    print(f"Warning: Skipping gain correction for EXT {ext} (index {idx})")
+                    rd_noise = np.nan
+                    rd_mean = np.nan
 
             rd_noise_all.append(rd_noise)
             if return_mean:
                 rd_mean_all.append(rd_mean)
             if saveplots == "return":
-                all_roi_figs.append(roi_fig) # Collect the returned figure
+                all_roi_figs.append(roi_fig)
 
+        # Ahora se añade UNA VEZ por imagen
         all_noise_data.append(rd_noise_all)
         if return_mean:
             all_mean_data.append(rd_mean_all)
 
-# Conditional for writing to TXT
+        # Guardado opcional
         if save_txt:
             try:
-                string_line_noise = " ".join(
-                    f"{x:.5f}" for x in np.array(all_noise_data).flatten()
-                )
+                string_line_noise = " ".join(f"{x:.5f}" for x in np.array(rd_noise_all))
                 with open(filename, "a") as file_noise:
                     file_noise.write(string_line_noise + "\n")
                 print(f"Saved noise: {path_file} -> '{filename}'")
+
                 if return_mean:
                     filename_mean = filename.replace(".txt", "_mean.txt")
-                    string_line_mean = " ".join(
-                        f"{x:.2f}" for x in np.array(all_mean_data).flatten()
-                    )
+                    string_line_mean = " ".join(f"{x:.2f}" for x in np.array(rd_mean_all))
                     with open(filename_mean, "a") as file_mean:
                         file_mean.write(string_line_mean + "\n")
                     print(f"Saved mean: {path_file} -> '{filename_mean}'")
 
                 if saveplots is True:
-                    print("Saving readout noise ROI plots (implementation needed)")
+                    print("Saving readout noise ROI plots (not yet implemented)")
 
             except Exception as e:
                 print(f"Error writing to file: {e}")
 
     if return_mean and saveplots == "return":
-        return all_noise_data, all_mean_data, all_roi_figs, None # Returning ROI figs as noise figs
+        return all_noise_data, all_mean_data, all_roi_figs, None
     elif saveplots == "return":
-        return all_noise_data, None, all_roi_figs, None # Returning ROI figs as noise figs
+        return all_noise_data, None, all_roi_figs, None
     elif return_mean:
         return all_noise_data, all_mean_data, None, None
     else:
@@ -2148,3 +2125,39 @@ def find_linear_subset(x, y, window_size_initial, error_threshold=0.01, expansio
             return None, None
 
     return best_indices, np.abs(y[best_indices] - model.predict(x[best_indices].reshape(-1, 1))) / np.abs(y[best_indices]) if best_indices is not None and len(best_indices) >= 2 else (None, None)
+
+def obtain_fw_data(path_files, roi, extension_number):
+    exposure_times = defaultdict(list)
+    all_rois = []
+    extension_exptimes = []
+    extension_means = []
+
+    for file_path in path_files:
+        with fits.open(file_path) as hdulist:
+            exptime = hdulist[0].header.get('EXPTIME', None)
+            if exptime is None:
+                continue
+            exposure_times[exptime].append(file_path)
+
+    exposure_time_keys = sorted(exposure_times.keys())
+
+    for exptime in exposure_time_keys:
+        files = exposure_times[exptime]
+        if len(files) >= 2:
+            file1, file2 = files[:2]
+            with fits.open(file1) as hdul1, fits.open(file2) as hdul2:
+                if extension_number >= len(hdul1) or extension_number >= len(hdul2):
+                    continue
+                data1 = hdul1[extension_number].data
+                data2 = hdul2[extension_number].data
+                if data1 is None or data2 is None:
+                    continue
+                if roi:
+                    x_start, x_end, y_start, y_end = roi
+                    data1_roi = data1[y_start:y_end, x_start:x_end]
+                    data2_roi = data2[y_start:y_end, x_start:x_end]
+                    mean_data = (np.mean(data1_roi) + np.mean(data2_roi)) / 2
+                    extension_exptimes.append(exptime)
+                    extension_means.append(mean_data)
+                    all_rois.append((data1_roi, data2_roi, file1, file2))
+    return extension_means, extension_exptimes
