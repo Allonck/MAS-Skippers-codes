@@ -27,8 +27,6 @@ class PDF(FPDF):
         self.add_font("TimesNewRoman", "I", FONT_ITALIC)
         self.add_font("TimesNewRoman", "BI", FONT_BOLDITALIC)
 
-from astropy.io import fits
-
 def info_header(path_files, ext=0):
     """
     Extracts information from the header of a FITS file.
@@ -120,7 +118,7 @@ def gain_all(pdf, path_files, gain_limit, roi_gain, n_points):
             extension_number=i,
             n_points=n_points,
             savefigs="return",
-            rowcolsROI = [4,4]
+            rowcolsROI = [6,4]
         )
         g_all.append(g)
         gain_figs.append(fig_gain)
@@ -131,36 +129,49 @@ def fw_all(pdf, path_files, g_all, roifw, n_points):
     # x_data = np.arange(0,11000,1000) / 1000
     ext = 1
     # y_data = y_all[ext-1]
-
+    fw_all = []
+    fw_figs = []
     roifw = msu.roi_shifting([75,175,5,105])
-    y_data,x_data = msu.obtain_fw_data(path_files=path_files, roi=roifw[ext-1], extension_number=ext)
-    y_data = np.asarray(y_data, dtype=np.float32)
-    x_data = np.asarray(x_data, dtype=np.float32)
 
-    gain_by_hand = g_all[ext-1][0] #Change first
-    linear_indices, errors = msu.find_linear_subset(x_data, y_data, window_size_initial=6, max_iter_refine=5)
+    for i in range(1,16+1):
+        
+        y_data,x_data = msu.obtain_fw_data(path_files=path_files, roi=roifw[ext-1], extension_number=ext)
+        y_data = np.asarray(y_data, dtype=np.float32)
+        x_data = np.asarray(x_data, dtype=np.float32)
 
-    if linear_indices is not None:
-        print("Índices del subconjunto lineal encontrado:", linear_indices)
-        print("Errores relativos:", errors)
-        print(f"FW: {y_data[linear_indices][-1] / gain_by_hand}")
+        gain_by_hand = g_all[ext-1][0] #Change first
+        linear_indices, errors = msu.find_linear_subset(x_data, y_data, window_size_initial=6, max_iter_refine=10)
 
-        #plt.figure(figsize=(10, 6))
-        plt.scatter(x_data, y_data, label='Datos originales')
-        plt.scatter(x_data[linear_indices], y_data[linear_indices], color='red', label='Subconjunto lineal')
-        plt.plot(x_data[linear_indices], LinearRegression().fit(x_data[linear_indices].reshape(-1, 1), 
+        if linear_indices is not None:
+            print("Índices del subconjunto lineal encontrado:", linear_indices)
+            print("Errores relativos:", errors)
+            fw = y_data[linear_indices][-1] / gain_by_hand
+            print(f"FW: {fw}")
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            ax.scatter(x_data, y_data, label='Datos originales')
+            ax.scatter(x_data[linear_indices], y_data[linear_indices], color='red', label='Subconjunto lineal')
+            ax.plot(x_data[linear_indices], LinearRegression().fit(x_data[linear_indices].reshape(-1, 1), 
                                                             y_data[linear_indices]).predict(x_data[linear_indices].reshape(-1, 1))
-             , color='green', label=f'Ajuste lineal | FW = {y_data[linear_indices][-1] / gain_by_hand}[e-] | Assuming {gain_by_hand} of gain')
-        plt.xlabel('x')
-        plt.ylabel('y')
-        plt.title('Detección de subconjunto lineal')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-    else:
-        print("No se encontró un subconjunto lineal con el error especificado.")
-    return 
+             , color='green', label=f'Ajuste lineal | FW = {fw}[e-] | Assuming {gain_by_hand} of gain')
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_title('Detección de subconjunto lineal')
+            ax.legend()
+            ax.grid(True)
+            
+            fw_figs.append(fig)  # Guardar para PDF
+            fw_all.append(fw)
 
+            ext += 1
+
+        else:
+            print(f"EXT {ext}: No se encontró subconjunto lineal.")
+            fw_all.append(np.nan)
+            fw_figs.append(None)
+
+    return fw_all, fw_figs
     
 def create_gain_plots_grid(pdf, figs):
     """
@@ -302,8 +313,8 @@ def create_readout_noise_plots_grid(pdf, noise_figs):
         else:
             print(f"Warning: No readout noise plot for extension {ext_index}")
 
-def create_report_pdf(filename="my_document.pdf", path=".", roigain=[225,325,845,945], roird=[545, 635, 600, 700], roifw=[75,175,5,105],n_points=4):
-    #previous ROIgain: [405, 505, 770, 870] 
+def create_report_pdf(filename="my_document.pdf", path=".", roigain=[225,325,845,945], roird=[540,550,600,700], 
+                      roifw=[75,175,5,105],n_points=4):
     pdf = PDF()
     pdf.add_page()
 
@@ -388,8 +399,12 @@ def create_report_pdf(filename="my_document.pdf", path=".", roigain=[225,325,845
     # ------- FW CALCULATION -------------
     pdf.add_page() # Nueva página para los plots de Readout Noise
     pdf.cell(0, 10, "Plot de FW para cada extensión.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    fw_all(pdf, path_files, g_all, roifw, n_points)
+    fw, fw_figs = fw_all(pdf, path_files, g_all, roifw, n_points)
 
+    print(f"Full well by extension:{fw}")
+    
+    create_gain_plots_grid(pdf, fw_figs)  # Usar las figuras de ganancia
+    
     pdf.add_page()
     # --- Calculate Readout Noise and Get Plots ---
     print("Calculating Readout Noise...")
@@ -424,10 +439,10 @@ if __name__ == "__main__":
     parser.add_argument("--filename", type=str, default="my_document.pdf", help="Nombre del archivo PDF de salida.")
     parser.add_argument("--path", type=str, default=".", help="Path donde están los .fits")
     parser.add_argument("--roigain", type=int, nargs=4, default=[370, 420, 800, 850], help="ROI para calcular ganancia.")
-    parser.add_argument("--roird", type=int, nargs=4, default=[545, 635, 40, 140], help="ROI para calcular ruido de lectura.")
+    parser.add_argument("--roird", type=int, nargs=4, default=[540, 550, 600, 700], help="ROI para calcular ruido de lectura.")
     parser.add_argument("--roifw", type=int, nargs=4, default=[75, 175, 5, 105], help="ROI para calcular full well.")
     parser.add_argument("--npoints", type=int, default=4, help="Puntos a considerar para cálculo de ganancia.")
 
     args = parser.parse_args()
 
-    create_report_pdf(filename=args.filename, path=args.path, roigain=args.roigain, n_points=args.npoints)
+    create_report_pdf(filename=args.filename, path=args.path, roigain=args.roigain, roird=args.roird, roifw=args.roifw, n_points=args.npoints)

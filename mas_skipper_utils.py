@@ -11,6 +11,27 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from itertools import combinations
 
+def roi_shifting(roi):
+    """
+    Shift an ROI vector to align the prescans of the MAS sensor channels..
+
+    Args:
+        roi (list): The roi to align.
+    Returns:
+        shifted_roi (list): List of rois aligned.
+
+    Notes:
+        - For this case the amplifiers are 15[px] long (gaps).
+    """
+    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
+    gap = 15
+    shifted_roi = []
+    for ext in extensions:
+        x_start, x_end, y_start, y_end = [roi[0] + (gap * (ext - 1)), roi[1] + (gap * (ext - 1)), roi[2], roi[3]]  # Moving ROI
+        roi_shifted = [x_start, x_end, y_start, y_end]
+        shifted_roi.append(roi_shifted)
+    return shifted_roi
+    
 def obtain_path_files(path, ends_with=True, filtering=".fits", NOT=False):
     """
     Displays a single extension of a FITS file as an image.
@@ -123,34 +144,6 @@ def show_fits_image(filename, index = 1, cmap="gray", figsize=(16,9)):
     else:
         print(f"Filename: {filename} is not a str nor data type")
 
-def show_multi_fits_image(filename):
-    """
-    Displays all data-containing extensions of a FITS file.
-
-    Args:
-        filename (str): The path to the FITS file.
-
-    Returns:
-        None
-
-    Example:
-        >>> show_multi_fits_image("example.fits")
-
-    Notes:
-        - This function iterates over all extensions in the FITS file and uses 
-          `show_fits_image` to display the extensions that contain valid data.
-        - If an extension does not contain data, it is skipped with a message logged 
-          to the console.
-    """
-    with fits.open(filename) as hdulist:
-        print(f"Displaying file: {filename}")
-        # Iterate over all extensions
-        for i, hdu in enumerate(hdulist):
-            if hdu.data is not None:
-                print(f"  Extension {i}: Data shape = {hdu.data.shape}")
-                # Example: Show the image for this extension
-                show_fits_image(filename, index=i, cmap='gray')
-
 def combine_fits_extensions(path_files, extensions, output_file, method='mean'):
     """
     Combine multiple FITS extensions into a single image and save to a new FITS file.
@@ -201,7 +194,6 @@ def combine_fits_extensions(path_files, extensions, output_file, method='mean'):
         print(f"Combined image saved to: {output_file}")
         # Display the image (requires your own FITS viewer function)
         show_fits_image(output_file, index=1, cmap='gray')
-
 
 def combine_fits_extensions_shifted(path_files, output_file, ext_to_remove):
     """
@@ -2009,15 +2001,6 @@ def new_gain_mod(path_files, roi=None, n_points=5):
     plt.show()
     gains_list = list(gains.values())
     return gains_list
-
-def roi_shifting(roi):
-    extensions = [1, 14, 16, 15, 13, 11, 12, 10, 5, 2, 4, 3, 9, 6, 8, 7]
-    shifted_roi = []
-    for idx,ext in enumerate(extensions):
-        x_start, x_end, y_start, y_end = [roi[0] + (15 * (ext - 1)), roi[1] + (15 * (ext - 1)), roi[2], roi[3]]  # Moving ROI
-        roi_shifted = [x_start, x_end, y_start, y_end]
-        shifted_roi.append(roi_shifted)
-    return shifted_roi
 
 def find_linear_subset(x, y, window_size_initial, error_threshold=0.01, expansion_step=1, max_iter_refine=5):
     """
