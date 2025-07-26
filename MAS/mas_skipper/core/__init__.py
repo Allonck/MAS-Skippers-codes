@@ -9,5 +9,6 @@ from .core import (
     best_gain_fit_fast,
     save_readout_noise,
     find_linear_subset,
-    obtain_fw_data
+    obtain_fw_data,
+    roi_shifting_from_header
 )

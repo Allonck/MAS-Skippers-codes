@@ -38,6 +38,42 @@ def roi_shifting(roi, return_extensions_order=False):
     else:
         return shifted_roi
 
+def roi_shifting_from_header(fits_path):
+    """
+    Define ROIs de overscan por extensión usando los headers.
+
+    Lee NCOL, NROW y SKIPROW desde el header de cada extensión (del 1 al 16)
+    y devuelve un vector de ROIs: [col1, col2, row1, row2].
+
+    Returns:
+        roi_vector (list of list of int): Lista de ROIs para cada extensión.
+    """
+    roi_vector = []
+    with fits.open(fits_path, memmap=False) as hdul:
+        for ext in range(1, len(hdul)):
+            hdr = hdul[ext].header
+            try:
+                ncol = int(hdr.get('NCOL'))
+                nrow = int(hdr.get('NROW'))
+                skiprow = int(hdr.get('SKIPROW', 0))  # puede no estar presente
+
+                col_start = 540
+                col_end = 550
+                row_start = skiprow
+                row_end = skiprow + nrow
+
+                # Validación mínima
+                if col_end > ncol or row_end > (skiprow + nrow):
+                    print(f"⚠️ ROI out of bounds in EXT {ext}. Skipping.")
+                    roi_vector.append(None)
+                else:
+                    roi_vector.append([col_start, col_end, row_start, row_end])
+
+            except Exception as e:
+                print(f"❌ Error in EXT {ext}: {e}")
+                roi_vector.append(None)
+    return roi_vector
+
 def obtain_path_files(path, ends_with=True, filtering=".fits", NOT=False):
     """
     Displays a single extension of a FITS file as an image.
@@ -150,7 +186,7 @@ def show_fits_image(filename, index = 1, cmap="gray", figsize=(16,9)):
     else:
         print(f"Filename: {filename} is not a str nor data type")
 
-def mixer_shifted(path_files, output_file, ext_to_remove=None, roi_base=None):
+def mixer_shifted(path_files, output_file, ext_to_remove=None, roi_base=None, mode="mean"):
     """
     Loads, processes, and combines the specified extensions from a FITS file,
     removes specified extensions, averages the remaining images, and saves and displays the result.
@@ -203,6 +239,82 @@ def mixer_shifted(path_files, output_file, ext_to_remove=None, roi_base=None):
     average_image = np.mean(image_collector, axis=0)
 
     # Save as new FITS
+    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
+    image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
+    hdu = fits.HDUList([primary_hdu, image_hdu])
+    hdu.writeto(output_file, overwrite=True)
+    print(f"Combined image saved in: {output_file}")
+
+    show_fits_image(output_file, index=1, cmap="gray")
+    return output_file
+
+def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None, mode="mean"):
+    """
+    Loads, processes, and combines the specified extensions from a FITS file,
+    removes specified extensions, averages the remaining images (mean or weighted), and saves and displays the result.
+
+    Args:
+        path_files (str): Path to the input FITS file.
+        output_file (str): Name of the output FITS file to save.
+        ext_to_remove (list): List of extension indices (1-based) to remove.
+        roi_base (list): Base ROI in format [x1, x2, y1, y2].
+        mode (str): Combination mode: 'mean' or 'weight'.
+
+    Returns:
+        output_file (str): Path to saved FITS file.
+    """
+
+    if roi_base is None:
+        roi_base = [0, 512, 0, 1024]
+
+    # Extension order and shifted ROIs
+    shifted_rois, extensions = roi_shifting(roi_base, return_extensions_order=True)
+
+    # Pesos para media ponderada (ordenados por extensión)
+    weights = np.array([
+        0.1054, 0.0326, 0.0378, 0.0399,
+        0.0467, 0.0270, 0.0303, 0.0328,
+        0.0329, 0.0825, 0.0762, 0.0746,
+        0.0581, 0.1104, 0.1021, 0.1107
+    ])
+
+    image_collector = []
+    weights_used = []
+
+    with fits.open(path_files) as hdul:
+        ncol = int(hdul[2].header['NCOL'])
+        primary_hdr = hdul[0].header.copy()
+        image_hdr = hdul[1].header.copy()
+
+    pad_right = ncol - (roi_base[1] - roi_base[0])
+
+    for i, (ext, roi) in enumerate(zip(extensions, shifted_rois)):
+        if ext_to_remove and ext in ext_to_remove:
+            continue
+
+        x_start, x_end, y_start, y_end = roi
+        image_data = fits.getdata(path_files, ext)
+        roi_data = image_data[y_start:y_end, x_start:x_end]
+        roi_data = np.pad(roi_data, ((0, 0), (0, pad_right)), mode='constant', constant_values=0)
+
+        image_collector.append(roi_data)
+
+        if mode == "weight":
+            weights_used.append(weights[ext - 1])  # ext is 1-based
+
+    image_collector = np.array(image_collector)
+
+    if mode == "mean":
+        average_image = np.mean(image_collector, axis=0)
+
+    elif mode == "weight":
+        weights_used = np.array(weights_used)
+        weights_used /= weights_used.sum()  # Normalize to 1
+        average_image = np.average(image_collector, axis=0, weights=weights_used)
+
+    else:
+        raise ValueError("Mode must be 'mean' or 'weight'.")
+
     primary_hdu = fits.PrimaryHDU(header=primary_hdr)
     image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
     hdu = fits.HDUList([primary_hdu, image_hdu])
