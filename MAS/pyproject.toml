@@ -1,0 +1,27 @@
+[project]
+name = "mas_skipper_pipeline"
+version = "0.1.0"
+description = "Imaging reduction package for the MAS Skipper CCD"
+authors = [
+    {name = "Christopher Montalbán", email = "christopher.montalban@userena.cl"}
+]
+requires-python = ">=3.8"
+
+# ALL your project's runtime dependencies go here, directly under [project]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "scikit-learn",
+    "astropy>=5.2,<6.0",
+    "ccdproc>=2.4"
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mas_skipper"]
+
+[project.scripts]
+mas-ccd = "mas_skipper.imaging.mas_ccd:main"
