@@ -14,7 +14,7 @@ def roi_shifting(roi, return_extensions_order=False):
     Args:
         roi (list): The ROI to align, format [x1, x2, y1, y2].
         return_extensions_order (bool): If True, also return the extension order used.
-
+    
     Returns:
         shifted_roi (list): List of shifted ROIs aligned with amplifier layout.
         extensions (optional): Extension order used (if return_extensions_order=True).
