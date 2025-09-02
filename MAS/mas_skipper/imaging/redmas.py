@@ -373,7 +373,7 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file, com
         flat_files (list): Lista de archivos flat.
         master_bias_path (str): Ruta al master bias (usado para corregir flats).
         output_file (str): Ruta para guardar el master flat normalizado.
-        combine_type (str): Método de combinación: 'median' o 'mean'.
+        combine_type (str): Metodo de combinación: 'median' o 'mean'.
         sigma_clip_enabled (bool): Si aplicar sigma clipping antes de combinar.
         sigma (float): Sigma para el sigma clipping.
         maxiters (int): Iteraciones máximas para sigma clipping.
