@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--master-bias-name", default="master_bias.fits", help="Nombre del archivo master bias.")
     parser.add_argument("--master-dark-name", default="master_dark.fits", help="Nombre del archivo master dark.")
     parser.add_argument("--master-flat-name", default="master_flat.fits", help="Nombre del archivo master flat.")
-    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[770, 895, 5, 1000],
+    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
                         help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
 
     args = parser.parse_args()
