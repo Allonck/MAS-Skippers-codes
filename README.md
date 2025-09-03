@@ -4,14 +4,14 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.2.1)
+## 🧰 Features (At the moment of 0.2.2)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
 - ✅ Normalized master flat creation.
 - ✅ Flat-fielding normalization with pixel-wise division.
 - ✅ Extension-preserving output compatible with `DS9 -mosaicimage iraf`.
-- ✅ Simple combination of images.
+- ✅ Mutiple simple-combination of images using mean.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
