@@ -296,7 +296,7 @@ def dark_subtraction(path_files, master_dark_file, output_file):
 
 def create_master_flat(flat_files, master_bias_path, output_file, combine_type='median', sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """
-    Crea un master flat a partir de archivos flat bias-correctos.
+    Crea un master flat a partir de archivos flat corregidos por bias.
 
     Args:
         flat_files (list): Lista de archivos flat.
