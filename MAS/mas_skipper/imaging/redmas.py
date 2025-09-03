@@ -14,7 +14,7 @@ def overscan_correction_combined(input_file, output_file, roi_vector, method='me
         input_file (str): Ruta al archivo FITS de entrada.
         output_file (str): Ruta al archivo FITS de salida (e.g., 'o_input.fits').
         roi_vector (list): Lista de ROIs para cada extensión.
-        method (str): Método de corrección ('mean' o 'poly').
+        method (str): Metodo de corrección ('mean' o 'poly').
 
     Returns:
         None. Guarda el archivo corregido.
