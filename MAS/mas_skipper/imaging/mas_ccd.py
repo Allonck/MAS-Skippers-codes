@@ -28,8 +28,8 @@ def main():
     parser.add_argument("--master-bias-name", default="master_bias.fits", help="Nombre del archivo master bias.")
     parser.add_argument("--master-dark-name", default="master_dark.fits", help="Nombre del archivo master dark.")
     parser.add_argument("--master-flat-name", default="master_flat.fits", help="Nombre del archivo master flat.")
-    parser.add_argument("--combined-output", default="combined_science.fits",
-                        help="Nombre del archivo combinado de ciencia.")
+    parser.add_argument("--combined-prefix", type=str, default="comb_",
+                        help="Prefijo para los archivos combinados de ciencia (e.g., 'comb_').")
     parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
                         help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
 
@@ -180,13 +180,14 @@ def main():
             "overscan_*.fits"
         )
         corrected_files = sorted(glob.glob(os.path.join(args.output, input_pattern)))
-        combined_output = os.path.join(args.output, args.combined_output)
 
         if not corrected_files:
             print(f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. No se puede combinar.")
         else:
             print(f"🔗 Combinando {len(corrected_files)} imágenes científicas...")
-            combine_science_images(corrected_files, combined_output, roi_base=[28, 539, 0, 1024])
+            for corrected_file in corrected_files:
+                combined_output = os.path.join(args.output, f"{args.combined_prefix}{os.path.basename(corrected_file)}")
+                combine_science_images([corrected_file], combined_output)
             print(f"✅ Proceso de combinación completado.")
 
 if __name__ == "__main__":
