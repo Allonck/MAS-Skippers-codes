@@ -4,14 +4,14 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.1)
+## 🧰 Features (At the moment of 0.2.1)
 
-- ✅ Overscan correction per extension (with independent ROI shifting).
-- ✅ Sigma-clipped master bias creation (per extension).
+- ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
 - ✅ Normalized master flat creation.
-- ✅ Flat-fielding with pixel-wise division.
+- ✅ Flat-fielding normalization with pixel-wise division.
 - ✅ Extension-preserving output compatible with `DS9 -mosaicimage iraf`.
+- ✅ Simple combination of images.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
@@ -32,15 +32,9 @@ pip install -e .
 
 mas-ccd \
   --raw ./raw_data \
-  --bias-pattern "bias*.fits" \
-  --flat-pattern "flat*.fits" \
+  --reduction
   --sci-pattern "sci*.fits" \
-  --output ./reduced \
-  --roi-overscan 540 550 5 1000 \
-  --make-master-bias \
-  --make-master-flat \
-  --do-bias-subtraction \
-  --do-flat-fielding
+  --output ./reduced 
   
 This will:
 
@@ -69,4 +63,4 @@ This will:
 ---
 ## Credits
 
-Developed by @Allonck, originally for internal use with the [SMARTS 0.9m telescope@Noirlab with the MAS-16ch belonging to Fermilab].
+Developed by @Allonck, originally for internal use with the [SMARTS 0.9m telescope@Noirlab with the MAS-16ch belonging to LBNL & Fermilab].
