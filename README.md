@@ -4,13 +4,13 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.2.2)
+## 🧰 Features (At the moment of 0.2.3)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
 - ✅ Normalized master flat creation.
 - ✅ Flat-fielding normalization with pixel-wise division.
-- ✅ Extension-preserving output compatible with `DS9 -mosaicimage iraf`.
+- ✅ Extension-preserving output compatible with `ds9 -mosaicimage iraf`.
 - ✅ Mutiple simple-combination of images using mean.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
@@ -56,7 +56,7 @@ This will:
 
 * Overscan ROI is fixed but can be shifted per extension using roi_shifting().
 
-* Headers are preserved in all outputs to support DS9 visualization (-mosaic iraf).
+* Headers are preserved in all outputs to support DS9 visualization (-mosaic iraf) and only modifies the keyword DATASEC.
 
 * The pipeline is modular and intended for further extension in the near future (e.g., cosmic ray rejection, gain correction).
 
