@@ -4,7 +4,7 @@
 import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clip
-
+from astroscrappy import detect_cosmics
 
 def overscan_correction_combined(input_file, output_file, roi_vector, method='mean'):
     """
@@ -35,6 +35,7 @@ def overscan_correction_combined(input_file, output_file, roi_vector, method='me
                 coeffs = np.polyfit(x, np.mean(overscan_region, axis=0), 1)
                 overscan_value = np.polyval(coeffs, x).mean()
             corrected_data = data - overscan_value
+            print(f"✅ Ext {ext}: Overscan = {overscan_value:.3f}")
             hdu = fits.ImageHDU(data=corrected_data, header=hdul[ext].header)
             hdu.header['HISTORY'] = f'Overscan correction applied using {method}'
             hdu_list.append(hdu)
@@ -433,3 +434,121 @@ def flat_fielding(input_file, master_flat, output_file):
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Flat-fielding aplicado: {output_file}")
+
+
+def estimate_readnoise(input_file, roi_vector=None, bias_file=None, gain_vector=None):
+    """
+    Estima el ruido de lectura (en electrones) para cada extensión de un archivo FITS.
+
+    Args:
+        input_file (str): Ruta al archivo FITS de entrada.
+        roi_vector (list): Lista de ROIs [col_start, col_end, row_start, row_end] para cada extensión.
+        bias_file (str): Ruta al archivo bias para estimar el ruido (opcional).
+        gain_vector (list): Lista de ganancias (e-/ADU) por extensión, o float si es igual para todas.
+
+    Returns:
+        list: Lista de valores de readnoise (en electrones) para cada extensión.
+    """
+    readnoise_vector = []
+    # Normalizar gain_vector como lista
+    n_extensions = 16  # Asumimos 16 canales para MAS-Skipper CCD
+    if isinstance(gain_vector, (int, float)):
+        gain_vector = [gain_vector] * n_extensions
+    elif gain_vector is None:
+        gain_vector = [50] * n_extensions  # Valor por defecto para 'other+other'
+
+    with fits.open(input_file, mode='readonly') as hdul:
+        for ext in range(1, min(len(hdul), n_extensions + 1)):
+            data = hdul[ext].data
+            if data is None:
+                print(f"⚠️ Extensión {ext} vacía en {input_file}. Usando readnoise por defecto.")
+                readnoise_vector.append(3.84)  # Valor por defecto en electrones
+                continue
+
+            if roi_vector and ext - 1 < len(roi_vector):
+                # Usar región de overscan específica para esta extensión
+                overscan_roi = roi_vector[ext - 1]
+                overscan_data = data[overscan_roi[2]:overscan_roi[3], overscan_roi[0]:overscan_roi[1]]
+                readnoise_adu = np.std(overscan_data)  # Desviación estándar en ADU
+            elif bias_file:
+                # Usar archivo bias
+                with fits.open(bias_file, mode='readonly') as bias_hdu:
+                    if ext < len(bias_hdu) and bias_hdu[ext].data is not None:
+                        bias_data = bias_hdu[ext].data
+                        readnoise_adu = np.std(bias_data)  # Desviación estándar en ADU
+                    else:
+                        print(f"⚠️ Extensión {ext} no válida en bias file. Usando readnoise por defecto.")
+                        readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
+            else:
+                print(f"⚠️ No roi_vector ni bias file para extensión {ext}. Usando readnoise por defecto.")
+                readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
+
+            # Convertir a electrones
+            gain = gain_vector[ext - 1] if ext - 1 < len(gain_vector) else gain_vector[0]
+            readnoise_e = readnoise_adu / gain if gain != 0 else 3.84
+            readnoise_vector.append(readnoise_e)
+
+    print(f"Readout-noise calculado por extensión (en e-): {readnoise_vector}")
+    return readnoise_vector
+
+
+def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, objlim=5.0,
+                          gain_vector=None, satlevel_vector=None, roi_vector=None, bias_file=None,
+                          readnoise_vector=None):
+    """
+    Corrige rayos cósmicos en un archivo FITS usando LACosmic (astroscrappy).
+
+    Args:
+        input_file (str): Ruta al archivo FITS de entrada.
+        output_file (str): Ruta al archivo FITS de salida.
+        sigclip (float): Umbral de detección en desviaciones estándar.
+        sigfrac (float): Fracción de sigclip para píxeles vecinos.
+        objlim (float): Límite de contraste para objetos reales.
+        gain_vector (list): Lista de ganancias (e-/ADU) por extensión, o float si es igual para todas.
+        satlevel_vector (list): Lista de niveles de saturación (ADU) por extensión, o float si es igual.
+        roi_vector (list): Lista de ROIs [col_start, col_end, row_start, row_end] para cada extensión (opcional).
+        bias_file (str): Ruta al archivo bias para calcular readnoise (opcional).
+        readnoise_vector (list): Lista de valores de readnoise (en electrones) por extensión (opcional).
+
+    Returns:
+        None. Guarda el archivo corregido.
+    """
+    with fits.open(input_file, mode='readonly') as hdul:
+        hdu_list = fits.HDUList()
+        hdu_list.append(hdul[0].copy())  # Copiar header primario
+
+        # Normalizar gain y satlevel como listas
+        n_extensions = len(hdul) - 1
+        if isinstance(gain_vector, (int, float)):
+            gain_vector = [gain_vector] * n_extensions
+        if isinstance(satlevel_vector, (int, float)):
+            satlevel_vector = [satlevel_vector] * n_extensions
+
+        # Usar readnoise_vector proporcionado o calcularlo
+        if readnoise_vector is None:
+            readnoise_vector = estimate_readnoise(input_file, roi_vector=roi_vector, bias_file=bias_file,
+                                                  gain_vector=gain_vector)
+
+        for ext in range(1, len(hdul)):
+            data = hdul[ext].data
+            if data is None:
+                print(f"⚠️ Extensión {ext} vacía en {input_file}. Saltando.")
+                continue
+
+            # Obtener parámetros para esta extensión
+            gain = gain_vector[ext - 1] if ext - 1 < len(gain_vector) else gain_vector[0]
+            satlevel = satlevel_vector[ext - 1] if ext - 1 < len(satlevel_vector) else satlevel_vector[0]
+            readnoise = readnoise_vector[ext - 1] if ext - 1 < len(readnoise_vector) else 3.84
+
+            # Aplicar LACosmic
+            crmask, clean_data = detect_cosmics(
+                data, sigclip=sigclip, sigfrac=sigfrac, objlim=objlim,
+                gain=gain, readnoise=readnoise, satlevel=satlevel,
+                cleantype='medmask', fsmode='median'
+            )
+            hdu = fits.ImageHDU(data=clean_data, header=hdul[ext].header)
+            hdu.header[
+                'HISTORY'] = f'Cosmic ray correction applied with LACosmic (gain={gain}, readnoise={readnoise}, satlevel={satlevel})'
+            hdu_list.append(hdu)
+        hdu_list.writeto(output_file, overwrite=True)
+    print(f"✅ Rayos cósmicos corregidos: {output_file}")
