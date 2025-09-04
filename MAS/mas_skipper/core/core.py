@@ -324,6 +324,84 @@ def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None,
     show_fits_image(output_file, index=1, cmap="gray")
     return output_file
 
+
+def combine_science_images(corrected_files, output_file, roi_base=None):
+    """
+    Combina imágenes científicas corregidas en una sola imagen alineada, llenando el overscan con ceros.
+
+    Args:
+        corrected_files (list): Lista de archivos FITS corregidos.
+        output_file (str): Ruta para el archivo FITS combinado.
+        roi_base (list): ROI base en formato [x1, x2, y1, y2]. Por defecto [0, 512, 0, 1024].
+
+    Returns:
+        None. Guarda el archivo combinado.
+    """
+    if not corrected_files:
+        print("⚠️ No hay archivos corregidos para combinar.")
+        return
+
+    if roi_base is None:
+        roi_base = [28, 539, 0, 1024]
+
+    # Obtener ROIs alineados y orden de extensiones
+    shifted_rois, extensions = roi_shifting(roi_base, return_extensions_order=True)
+
+    # Abrir el primer archivo para obtener dimensiones y headers
+    with fits.open(corrected_files[0]) as hdul:
+        ncol = int(hdul[2].header['NCOL'])  # Ancho total, incluyendo overscan
+        nrows = roi_base[3] - roi_base[2]  # Altura del ROI activo
+        primary_hdr = hdul[0].header.copy()
+        image_hdr = hdul[1].header.copy()
+
+    # Dimensiones finales: ancho total = NCOL, altura = nrows del ROI
+    full_image_shape = (nrows, ncol)
+    active_width = roi_base[1] - roi_base[0]  # Ancho del área activa por extensión
+    total_active_width = active_width * len(extensions)  # Ancho total del área activa
+
+    # Procesar cada archivo científico
+    combined_images = []
+    for file in corrected_files:
+        aligned_image = np.zeros(full_image_shape)  # Inicializar con ceros
+        current_x = 0  # Posición x para alinear áreas activas
+
+        with fits.open(file) as hdul:
+            for ext, roi in zip(extensions, shifted_rois):
+                x_start, x_end, y_start, y_end = roi
+                if ext >= len(hdul) or hdul[ext].data is None:
+                    print(f"⚠️ Extensión {ext} no válida en {file}. Saltando.")
+                    continue
+                image_data = hdul[ext].data.astype(float)
+                if (y_end > image_data.shape[0]) or (x_end > image_data.shape[1]):
+                    print(
+                        f"⚠️ ROI fuera de rango en ext {ext} de {file} (shape: {image_data.shape}, ROI: [{x_start}:{x_end}, {y_start}:{y_end}]). Saltando.")
+                    continue
+                roi_data = image_data[y_start:y_end, x_start:x_end]
+
+                # Colocar datos en el área activa alineada
+                if current_x + active_width <= ncol:
+                    aligned_image[:, current_x:current_x + active_width] = roi_data
+                    current_x += active_width  # Avanzar al siguiente bloque activo
+
+        # Las regiones fuera del área activa (overscan) ya están en 0
+        combined_images.append(aligned_image)
+
+    if not combined_images:
+        print("⚠️ No se pudieron combinar imágenes: no hay datos válidos.")
+        return
+
+    # Combinar todas las imágenes alineadas (promedio)
+    final_image = np.mean(combined_images, axis=0)
+
+    # Guardar como FITS
+    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
+    image_hdu = fits.ImageHDU(data=final_image, header=image_hdr)
+    image_hdu.header['HISTORY'] = f"Combined from {len(combined_images)} sci images, aligned & overscan set to 0"
+    image_hdu.header['DATASEC'] = f"[{roi_base[0] - 27}:{roi_base[1] - 27},{roi_base[2] + 1}:{roi_base[3]}]"
+    hdu = fits.HDUList([primary_hdu, image_hdu])
+    hdu.writeto(output_file, overwrite=True)
+    print(f"✅ Imagen combinada guardada: {output_file}")
+
 def calculate_extension_gain_roi(path_files, roi, extension_number, n_points=5, savefigs=False,
                                                rowcols_roi=None):
     """
