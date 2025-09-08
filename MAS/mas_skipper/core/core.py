@@ -345,7 +345,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None):
 
     # Abrir el primer archivo para obtener dimensiones y headers
     with fits.open(corrected_files[0]) as hdul:
-        ncol = int(hdul[2].header.get('NCOL', 600 * 16))  # Ancho total, incluyendo overscan
+        ncol = int(hdul[2].header.get('NCOL', 600))  # Ancho total, incluyendo overscan. Posible bug, era 600*16?
         nrows = roi_base[3] - roi_base[2]  # Altura del ROI activo
         primary_hdr = hdul[0].header.copy()
         image_hdr = hdul[1].header.copy()
