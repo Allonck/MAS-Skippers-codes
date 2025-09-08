@@ -1,6 +1,9 @@
 import numpy as np
+from astropy import units as u
 from astropy.io import fits
+from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
+from astropy.wcs import WCS
 from astroscrappy import detect_cosmics
 from ..core.core import roi_shifting
 
@@ -581,3 +584,77 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Rayos cósmicos corregidos: {output_file}")
+
+def add_wcs(input_file, output_file):
+    """
+    Añade coordenadas WCS a una imagen FITS usando astropy.wcs, extrayendo RA y DEC del HDU[0].
+
+    Args:
+        input_file (str): Ruta al archivo FITS de entrada (e.g., fbo_*.fits o fdbo_*.fits).
+        output_file (str): Ruta al archivo FITS de salida con WCS.
+
+    Returns:
+        None. Guarda el archivo con WCS actualizado.
+    """
+    with fits.open(input_file, mode='readonly') as hdul:
+        hdu_list = fits.HDUList()
+        hdu_list.append(hdul[0].copy())
+
+        # Extraer RA y DEC del HDU[0]
+        primary_header = hdul[0].header
+        if 'RA' in primary_header and 'DEC' in primary_header:
+            try:
+                # Usar SkyCoord para parsear RA y DEC (sexagesimal o decimal)
+                coord = SkyCoord(primary_header['RA'], primary_header['DEC'], unit=(u.hourangle, u.deg))
+                ra = coord.ra.deg  # Convertir a grados
+                dec = coord.dec.deg
+            except ValueError as e:
+                print(f"⚠️ Error al parsear RA/DEC en HDU[0] de {input_file}: {e}. Usando valores por defecto.")
+                ra = 0.0  # RA en grados
+                dec = 0.0  # Dec en grados
+        else:
+            # Coordenadas por defecto para punto vernal
+            ra = 0.0  # RA en grados
+            dec = 0.0  # Dec en grados
+            print(f"⚠️ No se encontraron RA/DEC en HDU[0] de {input_file}. Usando RA={ra}, Dec={dec}.")
+
+        # Escala fija
+        scale = 0.2546  # arcsec/píxel
+
+        for ext in range(1, len(hdul)):
+            if hdul[ext].data is None:
+                print(f"⚠️ Extensión {ext} vacía en {input_file}. Saltando.")
+                continue
+
+            data = hdul[ext].data
+            header = hdul[ext].header
+
+            # Verificar si ya hay WCS
+            if 'CRVAL1' in header and 'CRVAL2' in header:
+                print(f"📍 WCS ya presente en ext {ext} de {input_file}. Manteniendo header.")
+                hdu = fits.ImageHDU(data=data, header=header)
+                hdu_list.append(hdu)
+                continue
+
+            # Dimensiones de la imagen
+            naxis2, naxis1 = data.shape
+
+            # Crear WCS
+            wcs = WCS(naxis=2)
+            wcs.wcs.crpix = [naxis1 / 2, naxis2 / 2]  # Píxel de referencia en el centro
+            wcs.wcs.crval = [ra, dec]  # Coordenadas del píxel de referencia
+            wcs.wcs.cdelt = [(scale / 3600.0), scale / 3600.0]  # Escala en grados/píxel, RA hacia izquierda
+            wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']  # Proyección tangencial
+            wcs.wcs.cunit = ['deg', 'deg']  # Unidades
+            wcs.wcs.pc = [[1.0, 0.0], [0.0, 1.0]]  # Sin rotación (montura ecuatorial)
+
+            # Actualizar header con WCS
+            header.update(wcs.to_header())
+            header['HISTORY'] = f'WCS added using astropy.wcs (RA={ra}, Dec={dec}, scale={scale} arcsec/pix)'
+
+            hdu = fits.ImageHDU(data=data, header=header)
+            hdu_list.append(hdu)
+
+        hdu_list.writeto(output_file, overwrite=True)
+    print(f"✅ WCS añadido: {output_file}")
+    print(f"✅ WCS añadido: {output_file}")

@@ -6,7 +6,7 @@ import glob
 from astropy.io import fits
 from ..core.core import roi_shifting, combine_science_images
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
-    dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise
+    dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise, add_wcs
 
 CAMERA_CONFIGS = {
     'v5+hh2d7': {
@@ -114,6 +114,8 @@ def main():
     parser.add_argument("--master-flat-name", default="master_flat.fits", help="Nombre del archivo master flat.")
     parser.add_argument("--combined-prefix", type=str, default="comb_",
                         help="Prefijo para los archivos combinados de ciencia (e.g., 'comb_').")
+    parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
+
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
@@ -125,6 +127,7 @@ def main():
     make_master_flat = args.make_master_flat or args.full_reduction or args.reduction or args.do_flat_fielding
     do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
     do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
+    do_wcs = args.do_wcs or args.full_reduction
 
     # Generar vector de ROIs para overscan
     roi_vector = roi_shifting(args.roi_overscan)
@@ -214,7 +217,6 @@ def main():
             print("⚠️ Master dark no encontrado. Necesario para sustracción de dark.")
             return
 
-        # Verificar si hay archivos dark para ajustar do_dark_subtraction
         dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
         if not dark_files:
             do_dark_subtraction = False
@@ -245,8 +247,7 @@ def main():
             make_master_flat = False
             do_flat_fielding = False
         elif do_dark_subtraction and not os.path.exists(mdark_path):
-            print(
-                "⚠️ Master dark no encontrado. Necesario para corregir flats con dark. Saltando creación de master flat.")
+            print("⚠️ Master dark no encontrado. Necesario para corregir flats con dark. Saltando creación de master flat.")
             make_master_flat = False
             do_flat_fielding = False
         else:
@@ -267,63 +268,34 @@ def main():
                     overscan_group_files.append(overscan_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
                 create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
-                                              use_dark=do_dark_subtraction, master_dark_path=mdark_path)
+                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path)
                 print(f"✅ Master flat creado para filtro {filter_key}: {mflat_path}")
 
-    # 5. Flat fielding en ciencia
+    # 5. Verificación de master flats por filtro
     if do_flat_fielding:
         sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
-        mbias_path = os.path.join(args.output, args.master_bias_name)
-        mdark_path = os.path.join(args.output, args.master_dark_name)
-
         if not sci_files:
             print("⚠️ No se encontraron archivos de ciencia con el patrón especificado.")
             return
-
-        # Verificar si hay archivos dark para ajustar el prefijo
         dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
         use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
-
-        print(f"🌈 Aplicando master flat a {len(sci_files)} archivos")
+        print(f"🌈 Verificando master flats para {len(sci_files)} archivos de ciencia...")
         for f in sci_files:
             with fits.open(f) as hdul:
                 filters = hdul[0].header.get('FILTERS', 'unknown').strip()
-                # Usar solo la última palabra de 'FILTERS'
                 filter_key = filters.split()[-1] if filters != 'unknown' else 'unknown'
             mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
             if not os.path.exists(mflat_path):
-                print(f"⚠️ Master flat para filtro {filter_key} no encontrado. Saltando {f}.")
-                continue
-
-            overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-            bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-            dark_corrected_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
-            # Determinar prefijo según pasos aplicados
-            prefix = "f"
-            if use_dark:
-                prefix = "fdbo"
-            elif do_bias_subtraction:
-                prefix = "fbo"
-            else:
-                prefix = "fo"
-            flat_corrected_file = os.path.join(args.output, f"{prefix}_{os.path.basename(f)}")
-
-            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
-            if do_bias_subtraction:
-                bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
-            if use_dark:
-                input_file = bias_corrected_file if do_bias_subtraction else overscan_file
-                dark_subtraction(input_file, mdark_path, dark_corrected_file)
-            input_file = dark_corrected_file if use_dark else (
-                bias_corrected_file if do_bias_subtraction else overscan_file)
-            flat_fielding(input_file, mflat_path, flat_corrected_file)
+                print(f"⚠️ Master flat para filtro {filter_key} no encontrado. Saltando flat-fielding para {f}.")
+                do_flat_fielding = False
+                break
 
     # 6. Procesamiento de imágenes de ciencia
     do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
     do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
     do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
     do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
-    dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
+    do_wcs = args.do_wcs or args.full_reduction or args.reduction
     use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
     if sci_files:
         print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia...")
@@ -345,6 +317,13 @@ def main():
                     dark_subtraction(bias_file if do_bias_subtraction else overscan_file, mdark_path, dark_file)
                 prefix = "dbo"
             if do_flat_fielding:
+                with fits.open(f) as hdul:
+                    filters = hdul[0].header.get('FILTERS', 'unknown').strip()
+                    filter_key = filters.split()[-1] if filters != 'unknown' else 'unknown'
+                mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
+                if not os.path.exists(mflat_path):
+                    print(f"⚠️ Master flat para filtro {filter_key} no encontrado. Saltando flat-fielding para {f}.")
+                    continue
                 flat_file = os.path.join(args.output, f"f{prefix}_{os.path.basename(f)}")
                 if not os.path.exists(flat_file):
                     flat_fielding(
@@ -352,16 +331,17 @@ def main():
                         mflat_path, flat_file
                     )
                 prefix = f"f{prefix}"
+                if do_wcs:
+                    add_wcs(flat_file, flat_file)
             if do_cosmic_ray_correction:
                 cosmic_file = os.path.join(args.output, f"c{prefix}_{os.path.basename(f)}")
                 if not os.path.exists(cosmic_file):
                     cosmic_ray_correction(
-                        flat_file if do_flat_fielding else (
-                            dark_file if use_dark else (bias_file if do_bias_subtraction else overscan_file)
-                        ),
-                        cosmic_file, readnoise_vector=read_noise, gain_vector=gain_vector, satlevel_vector=satlevel_vector
+                        flat_file,
+                        cosmic_file, sigclip=5.0, sigfrac=0.3, objlim=6.0,
+                        readnoise_vector=read_noise, gain_vector=gain_vector, satlevel_vector=satlevel_vector
                     )
-                    prefix = f"c{prefix}"
+                prefix = f"c{prefix}"
 
     # 7. Combinar imágenes de ciencia
     if sci_files:
@@ -381,10 +361,12 @@ def main():
         input_pattern = f"{prefix}_*.fits"
         corrected_files = sorted(glob.glob(os.path.join(args.output, input_pattern)))
         if not corrected_files:
-            print(f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. Intentando con archivos menos procesados.")
+            print(
+                f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. Intentando con archivos menos procesados.")
             alternative_patterns = [
                 f"c{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits" if do_cosmic_ray_correction else None,
                 f"{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits",
+                f"{'f' if do_flat_fielding else ''}o_*.fits" if do_flat_fielding else None,
                 "cdbo_*.fits" if do_cosmic_ray_correction and use_dark else None,
                 "dbo_*.fits" if use_dark else None,
                 "cbo_*.fits" if do_cosmic_ray_correction and do_bias_subtraction else None,
@@ -392,14 +374,13 @@ def main():
                 "co_*.fits" if do_cosmic_ray_correction else None,
                 "o_*.fits"
             ]
-            for pattern in alternative_patterns:
-                if pattern:
-                    corrected_files = sorted(glob.glob(os.path.join(args.output, pattern)))
-                    if corrected_files:
-                        input_pattern = pattern
-                        break
+            for pattern in [p for p in alternative_patterns if p]:
+                corrected_files = sorted(glob.glob(os.path.join(args.output, pattern)))
+                if corrected_files:
+                    input_pattern = pattern
+                    break
             if not corrected_files:
-                print("⚠️ No se encontraron archivos corregidos para combinar. Asegurándose de generar archivos overscan.")
+                print("⚠️ No se encontraron archivos corregidos para combinar. Generando archivos overscan.")
                 for f in sci_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     if not os.path.exists(overscan_file):
@@ -407,15 +388,22 @@ def main():
                 corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
                 input_pattern = "o_*.fits"
         if corrected_files:
-            print(f"🔗 Combinando {len(corrected_files)} imágenes científicas con patrón {input_pattern}...")
+            print(
+                f"🔗 Combinando los 16 canales de {len(corrected_files)} imágenes científicas con patrón {input_pattern}...")
+            combined_count = 0
+            processed_files = set()
             for corrected_file in corrected_files:
                 combined_output = os.path.join(args.output, f"{args.combined_prefix}{os.path.basename(corrected_file)}")
-                combine_science_images(
-                    [corrected_file],
-                    combined_output,
-                    roi_base=[1, 512, 0, 1024]
-                )
-            print(f"✅ Proceso de combinación completado.")
+                if corrected_file not in processed_files and not os.path.exists(combined_output):
+                    combine_science_images(
+                        [corrected_file],  # Solo la imagen actual
+                        combined_output,
+                        roi_base=[1, 512, 0, 1024]
+                    )
+                    combined_count += 1
+                    processed_files.add(corrected_file)
+                    print(f"✅ Imagen combinada guardada: {combined_output}")
+            print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
 
 if __name__ == "__main__":
     main()
