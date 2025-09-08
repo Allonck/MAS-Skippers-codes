@@ -147,15 +147,12 @@ def main():
     satlevel_vector = config.get('satlevel', [1400000] * 16)
 
     # Calcular readnoise una vez al inicio
-    mbias_path = os.path.join(args.output, args.master_bias_name)
-    readnoise_file = mbias_path if os.path.exists(mbias_path) else first_file[0] if first_file else None
-    readnoise_vector = [3.84] * 16  # Default para 16 extensiones
-    if readnoise_file:
-        readnoise_vector = estimate_readnoise(readnoise_file, roi_vector=roi_vector,
-                                              bias_file=mbias_path if readnoise_file != mbias_path else None,
-                                              gain_vector=gain_vector)
-    else:
-        print("⚠️ No se encontraron archivos para calcular readnoise. Usando valor por defecto: 3.84 e- por extensión.")
+    sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
+    read_noise = None
+    if sci_files and (args.do_cosmic_ray_correction or args.full_reduction or args.reduction or do_bias_subtraction):
+        print(f"📊 Calculando readout noise usando archivos {sci_files}...")
+        roi_vector = roi_shifting(args.roi_overscan)
+        read_noise = estimate_readnoise(sci_files, roi_vector=roi_vector)
 
     # 1. Master bias
     mbias_path = os.path.join(args.output, args.master_bias_name)
@@ -321,33 +318,50 @@ def main():
                 bias_corrected_file if do_bias_subtraction else overscan_file)
             flat_fielding(input_file, mflat_path, flat_corrected_file)
 
-    # 6. Corrección de rayos cósmicos
-    if do_cosmic_ray_correction:
-        dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
-        use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
-        print(f"🌌 Aplicando corrección de rayos cósmicos a {len(sci_files)} archivos")
-        for f in sci_files:
-            prefix = "f" if do_flat_fielding else ""
+    # 6. Procesamiento de imágenes de ciencia
+    do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
+    do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
+    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
+    do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
+    dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
+    use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
+    if sci_files:
+        print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia...")
+        for i, f in enumerate(sci_files, 1):
+            print(f"[{i}/{len(sci_files)}] {f}")
+            prefix = ""
+            overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+            if not os.path.exists(overscan_file):
+                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+            prefix = "o"
+            if do_bias_subtraction:
+                bias_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
+                if not os.path.exists(bias_file):
+                    bias_subtraction(overscan_file, mbias_path, bias_file)
+                prefix = "bo"
             if use_dark:
-                prefix = f"{'fdbo' if do_flat_fielding else 'dbo'}"
-            elif do_bias_subtraction:
-                prefix = f"{'fbo' if do_flat_fielding else 'bo'}"
-            else:
-                prefix = f"{'fo' if do_flat_fielding else 'o'}"
-            input_file = os.path.join(args.output, f"{prefix}_{os.path.basename(f)}")
-            cr_corrected_file = os.path.join(args.output, f"c{prefix}_{os.path.basename(f)}")
-            if not os.path.exists(input_file):
-                print(f"⚠️ Archivo {input_file} no encontrado. Intentando con overscan corregido.")
-                input_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                cr_corrected_file = os.path.join(args.output, f"co_{os.path.basename(f)}")
-                if not os.path.exists(input_file):
-                    overscan_correction_combined(f, input_file, roi_vector, method=args.method)
-            cosmic_ray_correction(
-                input_file, cr_corrected_file,
-                sigclip=4.5, sigfrac=0.3, objlim=5.0,
-                gain_vector=gain_vector, satlevel_vector=satlevel_vector,
-                roi_vector=roi_vector, bias_file=mbias_path, readnoise_vector=readnoise_vector
-            )
+                dark_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
+                if not os.path.exists(dark_file):
+                    dark_subtraction(bias_file if do_bias_subtraction else overscan_file, mdark_path, dark_file)
+                prefix = "dbo"
+            if do_flat_fielding:
+                flat_file = os.path.join(args.output, f"f{prefix}_{os.path.basename(f)}")
+                if not os.path.exists(flat_file):
+                    flat_fielding(
+                        dark_file if use_dark else (bias_file if do_bias_subtraction else overscan_file),
+                        mflat_path, flat_file
+                    )
+                prefix = f"f{prefix}"
+            if do_cosmic_ray_correction:
+                cosmic_file = os.path.join(args.output, f"c{prefix}_{os.path.basename(f)}")
+                if not os.path.exists(cosmic_file):
+                    cosmic_ray_correction(
+                        flat_file if do_flat_fielding else (
+                            dark_file if use_dark else (bias_file if do_bias_subtraction else overscan_file)
+                        ),
+                        cosmic_file, readnoise_vector=read_noise, gain_vector=gain_vector, satlevel_vector=satlevel_vector
+                    )
+                    prefix = f"c{prefix}"
 
     # 7. Combinar imágenes de ciencia
     if sci_files:
@@ -367,12 +381,10 @@ def main():
         input_pattern = f"{prefix}_*.fits"
         corrected_files = sorted(glob.glob(os.path.join(args.output, input_pattern)))
         if not corrected_files:
-            print(
-                f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. Intentando con archivos menos procesados.")
-            # Intentar con archivos menos procesados
+            print(f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. Intentando con archivos menos procesados.")
             alternative_patterns = [
-                f"c{'fdbo' if use_dark else 'fbo'}_*.fits" if do_cosmic_ray_correction and do_flat_fielding else None,
-                f"{'fdbo' if use_dark else 'fbo'}_*.fits" if do_flat_fielding else None,
+                f"c{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits" if do_cosmic_ray_correction else None,
+                f"{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits",
                 "cdbo_*.fits" if do_cosmic_ray_correction and use_dark else None,
                 "dbo_*.fits" if use_dark else None,
                 "cbo_*.fits" if do_cosmic_ray_correction and do_bias_subtraction else None,
@@ -386,19 +398,23 @@ def main():
                     if corrected_files:
                         input_pattern = pattern
                         break
-        if not corrected_files:
-            print("⚠️ No se encontraron archivos corregidos para combinar. Asegurándose de generar archivos overscan.")
-            for f in sci_files:
-                overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                if not os.path.exists(overscan_file):
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
-            corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
-            input_pattern = "o_*.fits"
+            if not corrected_files:
+                print("⚠️ No se encontraron archivos corregidos para combinar. Asegurándose de generar archivos overscan.")
+                for f in sci_files:
+                    overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    if not os.path.exists(overscan_file):
+                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
+                input_pattern = "o_*.fits"
         if corrected_files:
             print(f"🔗 Combinando {len(corrected_files)} imágenes científicas con patrón {input_pattern}...")
             for corrected_file in corrected_files:
                 combined_output = os.path.join(args.output, f"{args.combined_prefix}{os.path.basename(corrected_file)}")
-                combine_science_images([corrected_file], combined_output)
+                combine_science_images(
+                    [corrected_file],
+                    combined_output,
+                    roi_base=[1, 512, 0, 1024]
+                )
             print(f"✅ Proceso de combinación completado.")
 
 if __name__ == "__main__":
