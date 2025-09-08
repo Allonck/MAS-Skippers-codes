@@ -149,6 +149,17 @@ def main():
     gain_vector = config.get('gain', [50] * 16)
     satlevel_vector = config.get('satlevel', [1400000] * 16)
 
+    # Obtener NSAMP (HDU[1]) y EXPTIME (HDU[0]) de referencia desde el primer archivo científico
+    sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
+    reference_nsamp = None
+    reference_exptime = None
+    if sci_files:
+        with fits.open(sci_files[0]) as hdul:
+            reference_nsamp = hdul[1].header.get('NSAMP', None) if len(hdul) > 1 else None
+            reference_exptime = hdul[0].header.get('EXPTIME', None)
+        print(f"📋 NSAMP de referencia (ciencia, HDU[1]): {reference_nsamp}")
+        print(f"📋 EXPTIME de referencia (ciencia, HDU[0]): {reference_exptime}")
+
     # Calcular readnoise una vez al inicio
     sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
     read_noise = None
@@ -166,14 +177,27 @@ def main():
             make_master_bias = False
             do_bias_subtraction = False
         else:
-            overscan_bias_files = []
-            print(f"📥 Procesando {len(bias_files)} archivos bias...")
+            consistent_bias_files = []
             for f in bias_files:
-                out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                overscan_correction_combined(f, out_file, roi_vector, method=args.method)
-                overscan_bias_files.append(out_file)
-            create_master_bias(overscan_bias_files, mbias_path)
-            print(f"✅ Master bias creado: {mbias_path}")
+                with fits.open(f) as hdul:
+                    bias_nsamp = hdul[1].header.get('NSAMP', None) if len(hdul) > 1 else None
+                    if reference_nsamp is not None and bias_nsamp != reference_nsamp:
+                        print(f"⚠️ Archivo bias {f} tiene NSAMP={bias_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
+                        continue
+                    consistent_bias_files.append(f)
+            if not consistent_bias_files:
+                print("⚠️ No se encontraron archivos bias con NSAMP consistente. Saltando creación de master bias.")
+                make_master_bias = False
+                do_bias_subtraction = False
+            else:
+                overscan_bias_files = []
+                print(f"📥 Procesando {len(consistent_bias_files)} archivos bias con NSAMP consistente...")
+                for f in consistent_bias_files:
+                    out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    overscan_correction_combined(f, out_file, roi_vector, method=args.method)
+                    overscan_bias_files.append(out_file)
+                create_master_bias(overscan_bias_files, mbias_path)
+                print(f"✅ Master bias creado: {mbias_path}")
 
     # 2. Master dark
     mdark_path = os.path.join(args.output, args.master_dark_name)
@@ -188,18 +212,35 @@ def main():
             make_master_dark = False
             do_dark_subtraction = False
         else:
-            overscan_dark_files = []
-            bias_corrected_dark_files = []
-            print(f"📥 Procesando {len(dark_files)} archivos dark...")
+            consistent_dark_files = []
             for f in dark_files:
-                overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
-                bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
-                overscan_dark_files.append(overscan_file)
-                bias_corrected_dark_files.append(bias_corrected_file)
-            create_master_dark(bias_corrected_dark_files, mdark_path)
-            print(f"✅ Master dark creado: {mdark_path}")
+                with fits.open(f) as hdul:
+                    dark_nsamp = hdul[1].header.get('NSAMP', None) if len(hdul) > 1 else None
+                    dark_exptime = hdul[0].header.get('EXPTIME', None)
+                    if reference_nsamp is not None and dark_nsamp != reference_nsamp:
+                        print(f"⚠️ Archivo dark {f} tiene NSAMP={dark_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
+                        continue
+                    if reference_exptime is not None and dark_exptime != reference_exptime:
+                        print(f"⚠️ Archivo dark {f} tiene EXPTIME={dark_exptime} (HDU[0]), no coincide con EXPTIME={reference_exptime}. Omitiendo.")
+                        continue
+                    consistent_dark_files.append(f)
+            if not consistent_dark_files:
+                print("⚠️ No se encontraron archivos dark con NSAMP y EXPTIME consistentes. Saltando creación de master dark.")
+                make_master_dark = False
+                do_dark_subtraction = False
+            else:
+                overscan_dark_files = []
+                bias_corrected_dark_files = []
+                print(f"📥 Procesando {len(consistent_dark_files)} archivos dark con NSAMP y EXPTIME consistentes...")
+                for f in consistent_dark_files:
+                    overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
+                    overscan_dark_files.append(overscan_file)
+                    bias_corrected_dark_files.append(bias_corrected_file)
+                create_master_dark(bias_corrected_dark_files, mdark_path)
+                print(f"✅ Master dark creado: {mdark_path}")
 
     # 3. Sustracción de bias y dark en ciencia
     if do_bias_subtraction or do_dark_subtraction:
@@ -396,18 +437,20 @@ def main():
                 # Encontrar el archivo científico original a partir del nombre del archivo corregido
                 base_name = os.path.basename(corrected_file).replace(f"{prefix}_", "")
                 original_file = os.path.join(args.raw, base_name)
-                # Extraer filtro y tiempo de exposición del archivo original
+                # Extraer filtro, tiempo de exposición y NSAMP del archivo original
                 filter_key = "unknown"
                 exptime = "unknown"
+                nsamp = "unknown"
                 if os.path.exists(original_file):
                     with fits.open(original_file) as hdul:
                         filters = hdul[0].header.get('FILTERS', 'unknown').strip()
                         filter_key = filters.split()[-1] if filters != 'unknown' else 'unknown'
                         exptime = int(hdul[0].header.get('EXPTIME', 0))
+                        nsamp = hdul[1].header.get('NSAMP', 'unknown') if len(hdul) > 1 else 'unknown'
                 else:
-                    print(f"⚠️ Archivo original {original_file} no encontrado. Usando filtro 'unknown' y EXPTIME 'unknown'.")
+                    print(f"⚠️ Archivo original {original_file} no encontrado. Usando filtro 'unknown', EXPTIME 'unknown' y NSAMP 'unknown'.")
                 # Construir el nombre del archivo combinado
-                combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s.fits")
+                combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s_{nsamp}.fits")
                 if corrected_file not in processed_files and not os.path.exists(combined_output):
                     combine_science_images(
                         [corrected_file],  # Solo la imagen actual
