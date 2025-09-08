@@ -4,7 +4,7 @@ import argparse
 import os
 import glob
 from astropy.io import fits
-from mas_skipper import roi_shifting, combine_science_images
+from ..core.core import roi_shifting, combine_science_images
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
     dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise
 
@@ -34,7 +34,6 @@ CAMERA_CONFIGS = {
         'satlevel': 1400000  # Asumir 28ke-.
     }
 }
-
 
 def detect_camera_config(file_path):
     """
@@ -88,7 +87,7 @@ def detect_camera_config(file_path):
             return 'other'
 
 def main():
-    parser = argparse.ArgumentParser(description="Reducción MAS Skipper CCD (overscan + bias + dark + flat)")
+    parser = argparse.ArgumentParser(description="MASSKIP v0.3.0 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")

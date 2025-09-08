@@ -20,8 +20,8 @@
 ## 📦 Installation
 
 ```bash
-git clone https://github.com/youruser/masskip.git
-cd masskip
+git clone https://github.com/Allonck/MAS-Skippers-codes.git
+cd MAS
 python3 -m venv .maspipeline
 source .maspipeline/bin/activate
 pip install -e .
@@ -34,8 +34,7 @@ pip install -e .
 mas-ccd \
   --raw ./raw_data \
   --reduction
-  --sci-pattern "sci*.fits" \
-  --output ./reduced 
+  --sci-pattern "sci*.fits" 
   
 This will:
 

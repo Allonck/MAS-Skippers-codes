@@ -324,7 +324,6 @@ def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None,
     show_fits_image(output_file, index=1, cmap="gray")
     return output_file
 
-
 def combine_science_images(corrected_files, output_file, roi_base=None):
     """
     Combina imágenes científicas corregidas en una sola imagen alineada, llenando el overscan con ceros.

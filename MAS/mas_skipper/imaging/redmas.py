@@ -1,6 +1,3 @@
-#redmas.py
-#Reducción básica para imágenes MAS-Skipper CCD
-
 import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clip
