@@ -4,3 +4,7 @@
 # Archivos de la pipeline de MAS
 MAS/.maspipeline/
 MAS/mas_skipper_pipeline.egg-info/
+mas_skipper/__pycache__/
+mas_skipper/core/__pycache__/
+mas_skipper/imaging/__pycache__/
+mas_skipper/report/__pycache__/
