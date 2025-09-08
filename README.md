@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.3.0)
+## 🧰 Features (At the moment of 0.4.0)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -13,6 +13,7 @@
 - ✅ Extension-preserving output compatible with `ds9 -mosaicimage iraf`.
 - ✅ Mutiple simple-combination of images using mean.
 - ✅ Cosmic rays rejection available.
+- ✅ Add WCS.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
@@ -32,8 +33,7 @@ pip install -e .
 ## ⚙️ Example Use of CLI
 
 mas-ccd \
-  --raw ./raw_data \
-  --reduction
+  --reduction \
   --sci-pattern "sci*.fits" 
   
 This will:
