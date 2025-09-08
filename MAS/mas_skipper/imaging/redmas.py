@@ -1,11 +1,15 @@
 import numpy as np
+from astropy import units as u
 from astropy.io import fits
+from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
+from astropy.wcs import WCS
 from astroscrappy import detect_cosmics
+from ..core.core import roi_shifting
 
 def overscan_correction_combined(input_file, output_file, roi_vector, method='mean'):
     """
-    Aplica corrección de overscan a todas las extensiones de un archivo FITS.
+    Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta el overscan.
 
     Args:
         input_file (str): Ruta al archivo FITS de entrada.
@@ -14,8 +18,13 @@ def overscan_correction_combined(input_file, output_file, roi_vector, method='me
         method (str): Metodo de corrección ('mean' o 'poly').
 
     Returns:
-        None. Guarda el archivo corregido.
+        None. Guarda el archivo corregido y recortado.
     """
+    # ROI activo fijo para la primera extensión
+    active_roi_base = [28, 539, 0, 1024]
+    # Obtener ROIs activos para todas las extensiones
+    active_rois = roi_shifting(active_roi_base)
+
     with fits.open(input_file, mode='readonly') as hdul:
         hdu_list = fits.HDUList()
         hdu_list.append(hdul[0].copy())  # Copiar header primario
@@ -33,11 +42,23 @@ def overscan_correction_combined(input_file, output_file, roi_vector, method='me
                 overscan_value = np.polyval(coeffs, x).mean()
             corrected_data = data - overscan_value
             print(f"✅ Ext {ext}: Overscan = {overscan_value:.3f}")
-            hdu = fits.ImageHDU(data=corrected_data, header=hdul[ext].header)
-            hdu.header['HISTORY'] = f'Overscan correction applied using {method}'
+
+            # Recortar el overscan usando el ROI activo
+            active_roi = active_rois[ext-1]
+            x_start, x_end, y_start, y_end = active_roi
+            if (y_end > corrected_data.shape[0]) or (x_end > corrected_data.shape[1]):
+                print(f"⚠️ ROI activo fuera de rango en ext {ext} de {input_file} (shape: {corrected_data.shape}, ROI: [{x_start}:{x_end}, {y_start}:{y_end}]). Saltando recorte.")
+                trimmed_data = corrected_data
+            else:
+                trimmed_data = corrected_data[y_start:y_end, x_start:x_end]
+
+            hdu = fits.ImageHDU(data=trimmed_data, header=hdul[ext].header)
+            hdu.header['HISTORY'] = f'Overscan correction applied using {method} and trimmed'
+            hdu.header['DATASEC'] = f"[{active_roi_base[0] - 27}:{active_roi_base[1] - 27},{active_roi_base[2] + 1}:{active_roi_base[3]}]"
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
-    print(f"✅ Overscan corregido: {output_file}")
+    print(f"✅ Overscan corregido y recortado: {output_file}")
+
 
 def create_master_bias(bias_files, output_file, combine_type='median', sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """
@@ -432,65 +453,80 @@ def flat_fielding(input_file, master_flat, output_file):
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Flat-fielding aplicado: {output_file}")
 
-
-def estimate_readnoise(input_file, roi_vector=None, bias_file=None, gain_vector=None):
+def estimate_readnoise(input_files, roi_vector=None, file=None, gain_vector=None):
     """
-    Estima el ruido de lectura (en electrones) para cada extensión de un archivo FITS.
+    Estima el ruido de lectura (en electrones) para cada extensión de archivos FITS raw.
 
     Args:
-        input_file (str): Ruta al archivo FITS de entrada.
+        input_files (str or list): Ruta a un archivo FITS o lista de archivos FITS raw.
         roi_vector (list): Lista de ROIs [col_start, col_end, row_start, row_end] para cada extensión.
-        bias_file (str): Ruta al archivo bias para estimar el ruido (opcional).
+        file (str): Ruta al archivo para estimar el ruido (opcional, e.g., bias).
         gain_vector (list): Lista de ganancias (e-/ADU) por extensión, o float si es igual para todas.
 
     Returns:
         list: Lista de valores de readnoise (en electrones) para cada extensión.
     """
     readnoise_vector = []
-    # Normalizar gain_vector como lista
     n_extensions = 16  # Asumimos 16 canales para MAS-Skipper CCD
+    if isinstance(input_files, str):
+        input_files = [input_files]  # Convertir a lista si es un solo archivo
     if isinstance(gain_vector, (int, float)):
         gain_vector = [gain_vector] * n_extensions
     elif gain_vector is None:
         gain_vector = [50] * n_extensions  # Valor por defecto para 'other+other'
 
-    with fits.open(input_file, mode='readonly') as hdul:
-        for ext in range(1, min(len(hdul), n_extensions + 1)):
-            data = hdul[ext].data
-            if data is None:
-                print(f"⚠️ Extensión {ext} vacía en {input_file}. Usando readnoise por defecto.")
-                readnoise_vector.append(3.84)  # Valor por defecto en electrones
+    for ext in range(1, n_extensions + 1):
+        variances = []
+        for input_file in input_files:
+            try:
+                with fits.open(input_file, mode='readonly') as hdul:
+                    if ext >= len(hdul) or hdul[ext].data is None:
+                        print(f"⚠️ Extensión {ext} vacía en {input_file}. Saltando.")
+                        continue
+                    data = hdul[ext].data
+                    if roi_vector and ext - 1 < len(roi_vector):
+                        # Usar región de overscan específica para esta extensión
+                        overscan_roi = roi_vector[ext - 1]
+                        if (overscan_roi[3] > data.shape[0]) or (overscan_roi[1] > data.shape[1]):
+                            print(f"⚠️ ROI overscan fuera de rango en ext {ext} de {input_file} (shape: {data.shape}, ROI: {overscan_roi}). Saltando.")
+                            continue
+                        overscan_data = data[overscan_roi[2]:overscan_roi[3], overscan_roi[0]:overscan_roi[1]]
+                        readnoise_adu = np.std(sigma_clip(overscan_data, sigma=3.0, maxiters=5))  # Desviación estándar en ADU
+                        variances.append(readnoise_adu ** 2)
+                    elif file:
+                        # Usar archivo bias
+                        with fits.open(file, mode='readonly') as bias_hdu:
+                            if ext < len(bias_hdu) and bias_hdu[ext].data is not None:
+                                bias_data = bias_hdu[ext].data
+                                readnoise_adu = np.std(sigma_clip(bias_data, sigma=3.0, maxiters=5))  # Desviación estándar en ADU
+                                variances.append(readnoise_adu ** 2)
+                            else:
+                                print(f"⚠️ Extensión {ext} no válida en bias file {file}. Usando readnoise por defecto.")
+                                readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
+                                variances.append(readnoise_adu ** 2)
+                    else:
+                        print(f"⚠️ No roi_vector ni bias file para extensión {ext} en {input_file}. Usando readnoise por defecto.")
+                        readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
+                        variances.append(readnoise_adu ** 2)
+            except Exception as e:
+                print(f"⚠️ Error procesando {input_file}, ext {ext}: {e}")
                 continue
 
-            if roi_vector and ext - 1 < len(roi_vector):
-                # Usar región de overscan específica para esta extensión
-                overscan_roi = roi_vector[ext - 1]
-                overscan_data = data[overscan_roi[2]:overscan_roi[3], overscan_roi[0]:overscan_roi[1]]
-                readnoise_adu = np.std(overscan_data)  # Desviación estándar en ADU
-            elif bias_file:
-                # Usar archivo bias
-                with fits.open(bias_file, mode='readonly') as bias_hdu:
-                    if ext < len(bias_hdu) and bias_hdu[ext].data is not None:
-                        bias_data = bias_hdu[ext].data
-                        readnoise_adu = np.std(bias_data)  # Desviación estándar en ADU
-                    else:
-                        print(f"⚠️ Extensión {ext} no válida en bias file. Usando readnoise por defecto.")
-                        readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
-            else:
-                print(f"⚠️ No roi_vector ni bias file para extensión {ext}. Usando readnoise por defecto.")
-                readnoise_adu = 3.84 / gain_vector[ext - 1]  # Convertir default a ADU
-
-            # Convertir a electrones
+        # Convertir varianza promedio a readnoise en electrones
+        if variances:
+            readnoise_adu = np.sqrt(np.mean(variances))
             gain = gain_vector[ext - 1] if ext - 1 < len(gain_vector) else gain_vector[0]
             readnoise_e = readnoise_adu / gain if gain != 0 else 3.84
             readnoise_vector.append(readnoise_e)
+        else:
+            print(f"⚠️ No se pudo calcular readnoise para ext {ext}. Usando 3.84.")
+            readnoise_vector.append(3.84)
 
-    print(f"Readout-noise calculado por extensión (en e-): {readnoise_vector}")
+    print(f"📊 Readout-noise calculado por extensión (en e-): {readnoise_vector}")
     return readnoise_vector
 
-
 def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, objlim=5.0,
-                          gain_vector=None, satlevel_vector=None, roi_vector=None, bias_file=None,
+                          gain_vector=None, satlevel_vector=None, roi_vector=None, file=None,
                           readnoise_vector=None):
     """
     Corrige rayos cósmicos en un archivo FITS usando LACosmic (astroscrappy).
@@ -504,7 +540,7 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
         gain_vector (list): Lista de ganancias (e-/ADU) por extensión, o float si es igual para todas.
         satlevel_vector (list): Lista de niveles de saturación (ADU) por extensión, o float si es igual.
         roi_vector (list): Lista de ROIs [col_start, col_end, row_start, row_end] para cada extensión (opcional).
-        bias_file (str): Ruta al archivo bias para calcular readnoise (opcional).
+        file (str): Ruta al archivo para calcular readnoise (opcional).
         readnoise_vector (list): Lista de valores de readnoise (en electrones) por extensión (opcional).
 
     Returns:
@@ -523,9 +559,8 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
 
         # Usar readnoise_vector proporcionado o calcularlo
         if readnoise_vector is None:
-            readnoise_vector = estimate_readnoise(input_file, roi_vector=roi_vector, bias_file=bias_file,
+            readnoise_vector = estimate_readnoise(input_file, roi_vector=roi_vector, file=file,
                                                   gain_vector=gain_vector)
-
         for ext in range(1, len(hdul)):
             data = hdul[ext].data
             if data is None:
@@ -536,7 +571,7 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
             gain = gain_vector[ext - 1] if ext - 1 < len(gain_vector) else gain_vector[0]
             satlevel = satlevel_vector[ext - 1] if ext - 1 < len(satlevel_vector) else satlevel_vector[0]
             readnoise = readnoise_vector[ext - 1] if ext - 1 < len(readnoise_vector) else 3.84
-
+            print(f"Ext {ext}: readnoise={readnoise}, gain={gain}, satlevel={satlevel}")
             # Aplicar LACosmic
             crmask, clean_data = detect_cosmics(
                 data, sigclip=sigclip, sigfrac=sigfrac, objlim=objlim,
@@ -549,3 +584,77 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Rayos cósmicos corregidos: {output_file}")
+
+def add_wcs(input_file, output_file):
+    """
+    Añade coordenadas WCS a una imagen FITS usando astropy.wcs, extrayendo RA y DEC del HDU[0].
+
+    Args:
+        input_file (str): Ruta al archivo FITS de entrada (e.g., fbo_*.fits o fdbo_*.fits).
+        output_file (str): Ruta al archivo FITS de salida con WCS.
+
+    Returns:
+        None. Guarda el archivo con WCS actualizado.
+    """
+    with fits.open(input_file, mode='readonly') as hdul:
+        hdu_list = fits.HDUList()
+        hdu_list.append(hdul[0].copy())
+
+        # Extraer RA y DEC del HDU[0]
+        primary_header = hdul[0].header
+        if 'RA' in primary_header and 'DEC' in primary_header:
+            try:
+                # Usar SkyCoord para parsear RA y DEC (sexagesimal o decimal)
+                coord = SkyCoord(primary_header['RA'], primary_header['DEC'], unit=(u.hourangle, u.deg))
+                ra = coord.ra.deg  # Convertir a grados
+                dec = coord.dec.deg
+            except ValueError as e:
+                print(f"⚠️ Error al parsear RA/DEC en HDU[0] de {input_file}: {e}. Usando valores por defecto.")
+                ra = 0.0  # RA en grados
+                dec = 0.0  # Dec en grados
+        else:
+            # Coordenadas por defecto para punto vernal
+            ra = 0.0  # RA en grados
+            dec = 0.0  # Dec en grados
+            print(f"⚠️ No se encontraron RA/DEC en HDU[0] de {input_file}. Usando RA={ra}, Dec={dec}.")
+
+        # Escala fija
+        scale = 0.2546  # arcsec/píxel
+
+        for ext in range(1, len(hdul)):
+            if hdul[ext].data is None:
+                print(f"⚠️ Extensión {ext} vacía en {input_file}. Saltando.")
+                continue
+
+            data = hdul[ext].data
+            header = hdul[ext].header
+
+            # Verificar si ya hay WCS
+            if 'CRVAL1' in header and 'CRVAL2' in header:
+                print(f"📍 WCS ya presente en ext {ext} de {input_file}. Manteniendo header.")
+                hdu = fits.ImageHDU(data=data, header=header)
+                hdu_list.append(hdu)
+                continue
+
+            # Dimensiones de la imagen
+            naxis2, naxis1 = data.shape
+
+            # Crear WCS
+            wcs = WCS(naxis=2)
+            wcs.wcs.crpix = [naxis1 / 2, naxis2 / 2]  # Píxel de referencia en el centro
+            wcs.wcs.crval = [ra, dec]  # Coordenadas del píxel de referencia
+            wcs.wcs.cdelt = [(scale / 3600.0), scale / 3600.0]  # Escala en grados/píxel, RA hacia izquierda
+            wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']  # Proyección tangencial
+            wcs.wcs.cunit = ['deg', 'deg']  # Unidades
+            wcs.wcs.pc = [[1.0, 0.0], [0.0, 1.0]]  # Sin rotación (montura ecuatorial)
+
+            # Actualizar header con WCS
+            header.update(wcs.to_header())
+            header['HISTORY'] = f'WCS added using astropy.wcs (RA={ra}, Dec={dec}, scale={scale} arcsec/pix)'
+
+            hdu = fits.ImageHDU(data=data, header=header)
+            hdu_list.append(hdu)
+
+        hdu_list.writeto(output_file, overwrite=True)
+    print(f"✅ WCS añadido: {output_file}")
+    print(f"✅ WCS añadido: {output_file}")
