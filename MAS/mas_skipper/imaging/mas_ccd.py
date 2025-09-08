@@ -393,7 +393,21 @@ def main():
             combined_count = 0
             processed_files = set()
             for corrected_file in corrected_files:
-                combined_output = os.path.join(args.output, f"{args.combined_prefix}{os.path.basename(corrected_file)}")
+                # Encontrar el archivo científico original a partir del nombre del archivo corregido
+                base_name = os.path.basename(corrected_file).replace(f"{prefix}_", "")
+                original_file = os.path.join(args.raw, base_name)
+                # Extraer filtro y tiempo de exposición del archivo original
+                filter_key = "unknown"
+                exptime = "unknown"
+                if os.path.exists(original_file):
+                    with fits.open(original_file) as hdul:
+                        filters = hdul[0].header.get('FILTERS', 'unknown').strip()
+                        filter_key = filters.split()[-1] if filters != 'unknown' else 'unknown'
+                        exptime = int(hdul[0].header.get('EXPTIME', 0))
+                else:
+                    print(f"⚠️ Archivo original {original_file} no encontrado. Usando filtro 'unknown' y EXPTIME 'unknown'.")
+                # Construir el nombre del archivo combinado
+                combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s.fits")
                 if corrected_file not in processed_files and not os.path.exists(combined_output):
                     combine_science_images(
                         [corrected_file],  # Solo la imagen actual
