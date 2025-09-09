@@ -115,6 +115,8 @@ def main():
     parser.add_argument("--combined-prefix", type=str, default="comb_",
                         help="Prefijo para los archivos combinados de ciencia (e.g., 'comb_').")
     parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
+    parser.add_argument("--remove-ext", type=int, nargs='*', default=[],
+                        help="Extensiones a excluir en la combinación (e.g., --remove-ext 14 15 16).")
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
@@ -455,7 +457,8 @@ def main():
                     combine_science_images(
                         [corrected_file],  # Solo la imagen actual
                         combined_output,
-                        roi_base=[1, 512, 0, 1024]
+                        roi_base=[1, 512, 0, 1024],
+                        exclude_extensions=args.remove_ext
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
