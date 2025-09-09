@@ -324,14 +324,15 @@ def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None,
     show_fits_image(output_file, index=1, cmap="gray")
     return output_file
 
-def combine_science_images(corrected_files, output_file, roi_base=None):
+def combine_science_images(corrected_files, output_file, roi_base=None, exclude_extensions=[]):
     """
-    Combina imágenes científicas corregidas en una sola imagen alineada, llenando el overscan con ceros.
+    Combina imágenes científicas corregidas promediando las extensiones válidas.
 
     Args:
         corrected_files (list): Lista de archivos FITS corregidos.
         output_file (str): Ruta para el archivo FITS combinado.
-        roi_base (list): ROI base en formato [x1, x2, y1, y2]. Por defecto [1, 512, 0, 1024].
+        roi_base (list): Ignorado (mantenido por compatibilidad). Por defecto None.
+        exclude_extensions (list): Lista de extensiones (1-16) a excluir del promedio.
 
     Returns:
         None. Guarda el archivo combinado.
@@ -340,56 +341,59 @@ def combine_science_images(corrected_files, output_file, roi_base=None):
         print("⚠️ No hay archivos corregidos para combinar.")
         return
 
-    if roi_base is None:
-        roi_base = [1, 512, 0, 1024]
+    # Orden de extensiones según el CCD MAS-Skipper
+    _, extorder = roi_shifting([0, 0, 0, 0], return_extensions_order=True)
 
-    # Abrir el primer archivo para obtener dimensiones y headers
-    with fits.open(corrected_files[0]) as hdul:
-        ncol = int(hdul[2].header.get('NCOL', 600))  # Ancho total, incluyendo overscan. Posible bug, era 600*16?
-        nrows = roi_base[3] - roi_base[2]  # Altura del ROI activo
-        primary_hdr = hdul[0].header.copy()
-        image_hdr = hdul[1].header.copy()
+    exclude_extensions = [int(ext) for ext in exclude_extensions if 1 <= int(ext) <= 16]
+    if exclude_extensions:
+        print(f"Excluyendo extensiones: {exclude_extensions}")
+    active_extensions = [ext for ext in extorder if ext not in exclude_extensions]
 
-    # Dimensiones finales: ancho total = NCOL, altura = nrows del ROI
-    full_image_shape = (nrows, ncol)
-    active_width = roi_base[1] - roi_base[0]  # Ancho del área activa por extensión (511 píxeles)
+    if not active_extensions:
+        print("❌ Error: Todas las extensiones fueron excluidas.")
+        return
 
     # Procesar cada archivo científico
     combined_images = []
     for file in corrected_files:
-        aligned_image = np.zeros(full_image_shape)  # Inicializar con ceros
-        current_x = 0  # Posición x para alinear áreas activas
-
         with fits.open(file) as hdul:
-            for ext in range(1, 17):  # 16 extensiones
+            # Obtener dimensiones y headers
+            nrows = int(hdul[1].header.get('NAXIS2', 1200))
+            ncols = int(hdul[1].header.get('NAXIS1', 900))
+            primary_hdr = hdul[0].header.copy()
+            image_hdr = hdul[1].header.copy()
+
+            # Inicializar matriz para promediar extensiones
+            valid_data = []
+            for ext in active_extensions:
                 if ext >= len(hdul) or hdul[ext].data is None:
                     print(f"⚠️ Extensión {ext} no válida en {file}. Saltando.")
-                    current_x += 600  # Asumir 600 píxeles por extensión (activo + overscan)
                     continue
                 image_data = hdul[ext].data.astype(float)
-                if image_data.shape != (nrows, active_width):
-                    print(f"⚠️ Dimensiones incorrectas en ext {ext} de {file} (esperado: [{active_width}, {nrows}], obtenido: {image_data.shape}). Saltando.")
-                    current_x += 600
+                if image_data.shape != (nrows, ncols):
+                    print(f"⚠️ Dimensiones incorrectas en ext {ext} de {file} (esperado: [{ncols}, {nrows}], obtenido: {image_data.shape}). Saltando.")
                     continue
+                valid_data.append(image_data)
 
-                # Colocar datos en el área activa alineada
-                if current_x + active_width <= ncol:
-                    aligned_image[:, current_x:current_x + active_width] = image_data
-                    current_x += 600  # Avanzar al siguiente bloque (activo + overscan)
+            if not valid_data:
+                print(f"⚠️ No hay datos válidos para {file}.")
+                continue
 
-        combined_images.append(aligned_image)
+            # Promediar las extensiones válidas
+            combined_image = np.mean(valid_data, axis=0)
+            combined_images.append(combined_image)
 
     if not combined_images:
         print("⚠️ No se pudieron combinar imágenes: no hay datos válidos.")
         return
 
-    # Combinar todas las imágenes alineadas (promedio)
+    # Promediar todas las imágenes (si hay múltiples archivos)
     final_image = np.mean(combined_images, axis=0)
 
     # Guardar como FITS
     primary_hdu = fits.PrimaryHDU(header=primary_hdr)
     image_hdu = fits.ImageHDU(data=final_image, header=image_hdr)
-    image_hdu.header['HISTORY'] = f"Combined from {len(combined_images)} sci images, aligned & overscan set to 0"
+    image_hdu.header['HISTORY'] = f"Averaged {len(active_extensions)} extensions from {len(combined_images)} sci images, excluded: {exclude_extensions}"
     hdu = fits.HDUList([primary_hdu, image_hdu])
     hdu.writeto(output_file, overwrite=True)
     print(f"✅ Imagen combinada guardada: {output_file}")
