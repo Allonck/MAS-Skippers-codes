@@ -87,7 +87,7 @@ def detect_camera_config(file_path):
             return 'other'
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v0.4.1 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v0.4.2 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
@@ -114,9 +114,11 @@ def main():
     parser.add_argument("--master-flat-name", default="master_flat.fits", help="Nombre del archivo master flat.")
     parser.add_argument("--combined-prefix", type=str, default="comb_",
                         help="Prefijo para los archivos combinados de ciencia (e.g., 'comb_').")
-    parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
+    parser.add_argument("--comb-mode", type=str, choices=['simple', 'weighted'], default='simple',
+                        help="Modo de combinación de imágenes de ciencia: 'simple' (promedio aritmético) o 'weighted' (ponderado por SNR).")
     parser.add_argument("--remove-ext", type=int, nargs='*', default=[],
-                        help="Extensiones a excluir en la combinación (e.g., --remove-ext 14 15 16).")
+                        help="Extensiones a excluir en la combinación de imágenes de ciencia (e.g., --remove-ext 14 15 16).")
+    parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
@@ -455,10 +457,11 @@ def main():
                 combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s_{nsamp}.fits")
                 if corrected_file not in processed_files and not os.path.exists(combined_output):
                     combine_science_images(
-                        [corrected_file],  # Solo la imagen actual
+                        [corrected_file],
                         combined_output,
-                        roi_base=[1, 512, 0, 1024],
-                        exclude_extensions=args.remove_ext
+                        roi_base=None,
+                        exclude_extensions=args.remove_ext,
+                        comb_mode=args.comb_mode
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
