@@ -326,7 +326,7 @@ def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None,
     show_fits_image(output_file, index=1, cmap="gray")
     return output_file
 
-def combine_science_images(corrected_files, output_file, roi_base=None, exclude_extensions=[], comb_mode='simple', weights=None):
+def combine_science_images(corrected_files, output_file, roi_base=None, exclude_extensions=None, comb_mode='simple', weights=None):
     """
     Combina imágenes científicas corregidas promediando las extensiones válidas.
 
@@ -341,15 +341,16 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
     Returns:
         None. Guarda el archivo combinado.
     """
+    from astropy.io import fits
+    import numpy as np
     if not corrected_files:
         print("⚠️ No hay archivos corregidos para combinar.")
         return
 
     # Orden de extensiones según el CCD MAS-Skipper
     _, extorder = roi_shifting([0, 0, 0, 0], return_extensions_order=True)
-    exclude_extensions = [int(ext) for ext in exclude_extensions if 1 <= int(ext) <= 16]
-    if exclude_extensions:
-        print(f"Excluyendo extensiones: {exclude_extensions}")
+    exclude_extensions = [int(ext) for ext in (exclude_extensions or []) if 1 <= int(ext) <= 16]
+    print(f"🔍 Extensiones excluidas recibidas: {exclude_extensions}")
     active_extensions = [ext for ext in extorder if ext not in exclude_extensions]
 
     if not active_extensions:
@@ -368,6 +369,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
 
             # Inicializar matriz para promediar extensiones
             valid_data = []
+            valid_exts = []
             for ext in active_extensions:
                 if ext >= len(hdul) or hdul[ext].data is None:
                     print(f"⚠️ Extensión {ext} no válida en {file}. Saltando.")
@@ -377,6 +379,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
                     print(f"⚠️ Dimensiones incorrectas en ext {ext} de {file} (esperado: [{ncols}, {nrows}], obtenido: {image_data.shape}). Saltando.")
                     continue
                 valid_data.append(image_data)
+                valid_exts.append(ext)
 
             if not valid_data:
                 print(f"⚠️ No hay datos válidos para {file}.")
@@ -388,7 +391,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
             elif comb_mode == 'weighted':
                 if weights is not None and len(weights) == 16:
                     # Usar pesos precalculados
-                    valid_weights = [weights[extorder.index(ext)] for ext in active_extensions]
+                    valid_weights = [weights[extorder.index(ext)] for ext in valid_exts]
                     if sum(valid_weights) == 0:
                         print(f"⚠️ Pesos nulos para {file}. Usando modo simple.")
                         combined_image = np.mean(valid_data, axis=0)
@@ -397,7 +400,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
                         valid_weights = np.array(valid_weights) / np.sum(valid_weights)
                         combined_image = np.average(valid_data, axis=0, weights=valid_weights)
                 else:
-                    # Calcular SNR internamente (como fallback, igual que v0.4.2)
+                    # Calcular SNR internamente
                     sig_box = (890, 274, 990, 374)
                     r1_s, c1_s, r2_s, c2_s = sig_box
                     if r2_s > nrows or c2_s > ncols:
@@ -405,7 +408,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
                         combined_image = np.mean(valid_data, axis=0)
                     else:
                         D = [img[r1_s:r2_s, c1_s:c2_s].ravel() for img in valid_data]
-                        snr = [np.mean(d) / np.std(d, ddof=1) if np.std(d, ddof=1) > 0 else 0 for d in D]
+                        snr = [np.nanmean(d) / np.nanstd(d) if np.nanstd(d) > 0 else 0 for d in D]
                         weights_snr = np.array(snr) / np.sum(snr) if np.sum(snr) > 0 else np.ones(len(D)) / len(D)
                         combined_image = np.average(valid_data, axis=0, weights=weights_snr)
             else:
@@ -414,7 +417,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
             combined_images.append(combined_image)
 
     if not combined_images:
-        print("⚠️ No se pudieron combinar imágenes: no hay scipy==1.10.1datos válidos.")
+        print("⚠️ No se pudieron combinar imágenes: no hay datos válidos.")
         return
 
     # Promediar todas las imágenes (si hay múltiples archivos)
@@ -423,7 +426,7 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
     # Guardar como FITS
     primary_hdu = fits.PrimaryHDU(header=primary_hdr)
     image_hdu = fits.ImageHDU(data=final_image, header=image_hdr)
-    image_hdu.header['HISTORY'] = f"Averaged {len(active_extensions)} extensions from {len(combined_images)} sci images, mode: {comb_mode}, excluded: {exclude_extensions}"
+    image_hdu.header['HISTORY'] = f"Averaged {len(valid_exts)} extensions from {len(combined_images)} sci images, mode: {comb_mode}, excluded: {exclude_extensions}"
     hdu = fits.HDUList([primary_hdu, image_hdu])
     hdu.writeto(output_file, overwrite=True)
     print(f"✅ Imagen combinada guardada: {output_file}")

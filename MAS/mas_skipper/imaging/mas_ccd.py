@@ -4,7 +4,7 @@ import argparse
 import os
 import glob
 from astropy.io import fits
-from ..core.core import roi_shifting, combine_science_images
+from ..core.core import roi_shifting, combine_science_images, optimize_weights_from_raw
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
     dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise, add_wcs
 
@@ -87,7 +87,7 @@ def detect_camera_config(file_path):
             return 'other'
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v0.4.2 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v0.4.3 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
@@ -437,6 +437,8 @@ def main():
                 f"🔗 Combinando los 16 canales de {len(corrected_files)} imágenes científicas con patrón {input_pattern}...")
             combined_count = 0
             processed_files = set()
+            _, extorder = roi_shifting([0, 0, 0, 0], return_extensions_order=True)
+
             for corrected_file in corrected_files:
                 # Encontrar el archivo científico original a partir del nombre del archivo corregido
                 base_name = os.path.basename(corrected_file).replace(f"{prefix}_", "")
@@ -456,17 +458,29 @@ def main():
                 # Construir el nombre del archivo combinado
                 combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s_{nsamp}.fits")
                 if corrected_file not in processed_files and not os.path.exists(combined_output):
+                    # Calcular pesos para modo weighted desde la imagen raw
+                    weights = None
+                    if args.comb_mode == 'weighted':
+                        if os.path.exists(original_file):
+                            weights = optimize_weights_from_raw(original_file, exclude_extensions=args.remove_ext)
+                            print(f"Pesos calculados desde {original_file}: {weights}")
+                        else:
+                            print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
+                            weights = [1.0 / (16 - len(args.remove_ext))] * 16
+                            for ext in args.remove_ext:
+                                weights[extorder.index(ext)] = 0.0
                     combine_science_images(
                         [corrected_file],
                         combined_output,
                         roi_base=None,
                         exclude_extensions=args.remove_ext,
-                        comb_mode=args.comb_mode
+                        comb_mode=args.comb_mode,
+                        weights=weights
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
                     print(f"✅ Imagen combinada guardada: {combined_output}")
-            print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
+                print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
 
 if __name__ == "__main__":
     main()
