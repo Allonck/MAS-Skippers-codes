@@ -8,3 +8,4 @@ dependencies:
   - matplotlib
   - fpdf
   - scikit-learn
+  - scipy==1.10.1

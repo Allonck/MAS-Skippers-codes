@@ -12,5 +12,6 @@ from .core import (
     save_readout_noise,
     find_linear_subset,
     obtain_fw_data,
-    roi_shifting_from_header
+    roi_shifting_from_header,
+    optimize_weights_from_raw
 )
