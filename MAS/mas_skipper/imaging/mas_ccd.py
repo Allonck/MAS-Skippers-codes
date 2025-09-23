@@ -210,9 +210,9 @@ def main():
                                 print(f"✅ Ext {ext} shape={data.shape} en {f}")
 
                     out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, out_file, roi_vector, method=args.method, sci_file=None)
+                    overscan_correction_combined(f, out_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     overscan_bias_files.append(out_file)
-                create_master_bias(overscan_bias_files, mbias_path, sci_file=None)
+                create_master_bias(overscan_bias_files, mbias_path)
                 print(f"✅ Master bias creado: {mbias_path}")
 
     # 2. Master dark
@@ -251,11 +251,11 @@ def main():
                 for f in consistent_dark_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
                     overscan_dark_files.append(overscan_file)
                     bias_corrected_dark_files.append(bias_corrected_file)
-                create_master_dark(bias_corrected_dark_files, mdark_path, sci_file=None)
+                create_master_dark(bias_corrected_dark_files, mdark_path)
                 print(f"✅ Master dark creado: {mdark_path}")
 
     # 3. Sustracción de bias y dark en ciencia
@@ -285,7 +285,7 @@ def main():
             bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
             dark_corrected_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
 
-            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
+            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
             if do_bias_subtraction:
                 bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
             if do_dark_subtraction:
@@ -330,11 +330,11 @@ def main():
                                 print(f"✅ Ext {ext} shape={data.shape} en {f}")
 
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     overscan_group_files.append(overscan_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
                 create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
-                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path, sci_file=None)
+                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path)
                 print(f"✅ Master flat creado para filtro {filter_key}: {mflat_path}")
 
     # 5. Verificación de master flats por filtro
@@ -370,7 +370,7 @@ def main():
             prefix = ""
             overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
             if not os.path.exists(overscan_file):
-                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
+                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
             prefix = "o"
             if do_bias_subtraction:
                 bias_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
@@ -451,7 +451,7 @@ def main():
                 for f in sci_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     if not os.path.exists(overscan_file):
-                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
+                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                 corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
                 input_pattern = "o_*.fits"
         if corrected_files:
