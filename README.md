@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.4.3.1)
+## 🧰 Features (At the moment of 0.4.3.1b)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -14,6 +14,7 @@
 - ✅ Mutiple simple and SNR-weighted based combination of images using mean.
 - ✅ Cosmic rays rejection available.
 - ✅ Add WCS.
+- ✅ Add ROI support (with some caveats like unstable master images).
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
