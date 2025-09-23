@@ -119,6 +119,7 @@ def main():
     parser.add_argument("--remove-ext", type=int, nargs='*', default=[],
                         help="Extensiones a excluir en la combinación de imágenes de ciencia (e.g., --remove-ext 14 15 16).")
     parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
+    parser.add_argument("--view-weighted-rois", action="store_true", help="Ver rango de ROIS en promedio ponderado.")
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
@@ -462,7 +463,7 @@ def main():
                     weights = None
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
-                            weights = optimize_weights_from_raw(original_file, exclude_extensions=args.remove_ext)
+                            weights = optimize_weights_from_raw(original_file, exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
                             print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
                             print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
@@ -472,7 +473,6 @@ def main():
                     combine_science_images(
                         [corrected_file],
                         combined_output,
-                        roi_base=None,
                         exclude_extensions=args.remove_ext,
                         comb_mode=args.comb_mode,
                         weights=weights

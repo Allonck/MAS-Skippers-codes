@@ -9,6 +9,9 @@ from collections import defaultdict
 from scipy.optimize import minimize
 from sklearn.linear_model import LinearRegression
 
+from matplotlib.patches import Rectangle
+from matplotlib.widgets import Slider
+
 def roi_shifting(roi, return_extensions_order=False):
     """
     Shift an ROI vector to align the prescans of the MAS sensor channels.
@@ -135,198 +138,26 @@ def obtain_output_paths(input_paths, suffix="_corrected"):
         output_path = os.path.join(directory, output_filename)
         output_paths.append(output_path)
     return output_paths
-    
-def show_fits_image(filename, index = 1, cmap="gray", figsize=(16,9)):
+
+def show_fits_image(data, cmap="gray", figsize=(8, 8)):
     """
-    Displays a single extension of a FITS file as an image.
+    Displays a 2D FITS image array with ZScale and colorbar.
 
-    Args:
-        filename (str): The path to the FITS file.
-        index (int, optional): The extension index to display. Defaults to 1.
-        cmap (str, optional): The colormap to use for the image. Defaults to 'hot'.
-        figsize (tuple, optional): The figsize to display in x,y order. Defaults to (16,9).
-    Returns:
-        image_data (2d-array): The ADU counts of the image. 
-
-    Example:
-        - show_fits_image("example.fits", index=2, cmap="viridis")
-
-    Notes:
-        The image intensity is scaled using `astropy.visualization.ZScaleInterval` 
-        for optimal visualization. A colorbar is added to indicate the intensity range.
     """
-    if isinstance(filename, str): #This check if filename is a path to a fits file or data array itself.
-        with fits.open(filename) as hdulist:
-            image_data = hdulist[index].data
-        zscale = ZScaleInterval()
-        zlow, zhigh = zscale.get_limits(image_data)
+    zscale = ZScaleInterval()
+    zlow, zhigh = zscale.get_limits(data)
 
-        fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(image_data, cmap=cmap, clim=(zlow, zhigh))
-        # Create colorbar with same height as the y-axis
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="1.5%", pad=0.05)
-        fig = ax.figure
-        fig.colorbar(im, cax=cax)
-        ax.invert_yaxis() #added this line
-        
-        return image_data
-    elif isinstance(filename, np.ndarray):
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(data, cmap=cmap, clim=(zlow, zhigh))
+    # Create colorbar with same height as the y-axis
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="1.5%", pad=0.05)
+    fig = ax.figure
+    fig.colorbar(im, cax=cax)
+    ax.invert_yaxis()  # added this line
+    return fig, ax, im
 
-        zscale = ZScaleInterval()
-        zlow, zhigh = zscale.get_limits(filename)
-
-        fig, ax = plt.subplots(figsize=figsize)
-        im = ax.imshow(filename, cmap=cmap, clim=(zlow, zhigh))
-        # Create colorbar with same height as the y-axis
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="1.5%", pad=0.05)
-        fig = ax.figure
-        fig.colorbar(im, cax=cax)
-        ax.invert_yaxis() #added this line
-        return filename
-    else:
-        print(f"Filename: {filename} is not a str nor data type")
-
-def mixer_shifted(path_files, output_file, ext_to_remove=None, roi_base=None, mode="mean"):
-    """
-    Loads, processes, and combines the specified extensions from a FITS file,
-    removes specified extensions, averages the remaining images, and saves and displays the result.
-
-    Args:
-        path_files (str): Path to the input FITS file.
-        output_file (str): Name of the output FITS file to save.
-        ext_to_remove (list): List of extension indices (1-based) to remove.
-        roi_base (list): Base ROI in format [x1, x2, y1, y2].
-
-    Returns:
-        output_file (str): Path to saved FITS file.
-    """
-
-    # Get aligned ROIs and extension order
-    if roi_base is None:
-        roi_base = [0, 512, 0, 1024]
-
-    shifted_rois, extensions = roi_shifting(roi_base, return_extensions_order=True)
-
-    # Collect the processed images
-    image_collector = []
-
-    # Open file for header info
-    with fits.open(path_files) as hdul:
-        ncol = int(hdul[2].header['NCOL'])  # To define right padding
-        primary_hdr = hdul[0].header.copy()
-        image_hdr = hdul[1].header.copy()
-
-    pad_right = ncol - (roi_base[1] - roi_base[0])  # width of the data
-
-    # Loop through the aligned extensions and ROIs
-    for i, (ext, roi) in enumerate(zip(extensions, shifted_rois)):
-        x_start, x_end, y_start, y_end = roi
-        image_data = fits.getdata(path_files, ext)
-        roi_data = image_data[y_start:y_end, x_start:x_end]
-
-        roi_data = np.pad(roi_data, ((0, 0), (0, pad_right)), mode='constant', constant_values=0)
-        image_collector.append(roi_data)
-
-    print(f"Pre-removal: {len(image_collector)}")
-
-    if ext_to_remove:
-        # Convert to 0-based indices
-        ext_to_remove = [extensions.index(ext) for ext in ext_to_remove if ext in extensions]
-        image_collector = np.delete(image_collector, ext_to_remove, axis=0)
-        print(f"Post-removal: {len(image_collector)}")
-
-    # Combine the images (average)
-    average_image = np.mean(image_collector, axis=0)
-
-    # Save as new FITS
-    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
-    image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
-    hdu = fits.HDUList([primary_hdu, image_hdu])
-    hdu.writeto(output_file, overwrite=True)
-    print(f"Combined image saved in: {output_file}")
-
-    show_fits_image(output_file, index=1, cmap="gray")
-    return output_file
-
-def mixer_shifted_v2(path_files, output_file, ext_to_remove=None, roi_base=None, mode="mean"):
-    """
-    Loads, processes, and combines the specified extensions from a FITS file,
-    removes specified extensions, averages the remaining images (mean or weighted), and saves and displays the result.
-
-    Args:
-        path_files (str): Path to the input FITS file.
-        output_file (str): Name of the output FITS file to save.
-        ext_to_remove (list): List of extension indices (1-based) to remove.
-        roi_base (list): Base ROI in format [x1, x2, y1, y2].
-        mode (str): Combination mode: 'mean' or 'weight'.
-
-    Returns:
-        output_file (str): Path to saved FITS file.
-    """
-
-    if roi_base is None:
-        roi_base = [0, 512, 0, 1024]
-
-    # Extension order and shifted ROIs
-    shifted_rois, extensions = roi_shifting(roi_base, return_extensions_order=True)
-
-    # Pesos para media ponderada (ordenados por extensión)
-    weights = np.array([
-        0.1054, 0.0326, 0.0378, 0.0399,
-        0.0467, 0.0270, 0.0303, 0.0328,
-        0.0329, 0.0825, 0.0762, 0.0746,
-        0.0581, 0.1104, 0.1021, 0.1107
-    ])
-
-    image_collector = []
-    weights_used = []
-
-    with fits.open(path_files) as hdul:
-        ncol = int(hdul[2].header['NCOL'])
-        primary_hdr = hdul[0].header.copy()
-        image_hdr = hdul[1].header.copy()
-
-    pad_right = ncol - (roi_base[1] - roi_base[0])
-
-    for i, (ext, roi) in enumerate(zip(extensions, shifted_rois)):
-        if ext_to_remove and ext in ext_to_remove:
-            continue
-
-        x_start, x_end, y_start, y_end = roi
-        image_data = fits.getdata(path_files, ext)
-        roi_data = image_data[y_start:y_end, x_start:x_end]
-        roi_data = np.pad(roi_data, ((0, 0), (0, pad_right)), mode='constant', constant_values=0)
-
-        image_collector.append(roi_data)
-
-        if mode == "weight":
-            weights_used.append(weights[ext - 1])  # ext is 1-based
-
-    image_collector = np.array(image_collector)
-
-    if mode == "mean":
-        average_image = np.mean(image_collector, axis=0)
-
-    elif mode == "weight":
-        weights_used = np.array(weights_used)
-        weights_used /= weights_used.sum()  # Normalize to 1
-        average_image = np.average(image_collector, axis=0, weights=weights_used)
-
-    else:
-        raise ValueError("Mode must be 'mean' or 'weight'.")
-
-    primary_hdu = fits.PrimaryHDU(header=primary_hdr)
-    image_hdu = fits.ImageHDU(data=average_image, header=image_hdr)
-    hdu = fits.HDUList([primary_hdu, image_hdu])
-    hdu.writeto(output_file, overwrite=True)
-    print(f"Combined image saved in: {output_file}")
-
-    show_fits_image(output_file, index=1, cmap="gray")
-    return output_file
-
-def combine_science_images(corrected_files, output_file, roi_base=None, exclude_extensions=None, comb_mode='simple', weights=None):
+def combine_science_images(corrected_files, output_file, exclude_extensions=None, comb_mode='simple', weights=None):
     """
     Combina imágenes científicas corregidas promediando las extensiones válidas.
 
@@ -335,14 +166,10 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
         output_file (str): Ruta para el archivo FITS combinado.
         roi_base (list): Ignorado (mantenido por compatibilidad). Por defecto None.
         exclude_extensions (list): Lista de extensiones (1-16) a excluir del promedio.
-        comb_mode (str): Modo de combinación: 'simple' (promedio aritmético) o 'weighted' (ponderado por SNR o pesos).
-        weights (list, optional): Pesos para las extensiones (longitud 16). Si None, calcula SNR internamente para 'weighted'.
-
-    Returns:
-        None. Guarda el archivo combinado.
+        comb_mode (str): Modo de combinación: 'simple' o 'weighted'.
+        weights (list, optional): Pesos para las extensiones (longitud 16).
+                                  Si None y modo 'weighted', calcula SNR internamente.
     """
-    from astropy.io import fits
-    import numpy as np
     if not corrected_files:
         print("⚠️ No hay archivos corregidos para combinar.")
         return
@@ -352,187 +179,218 @@ def combine_science_images(corrected_files, output_file, roi_base=None, exclude_
     exclude_extensions = [int(ext) for ext in (exclude_extensions or []) if 1 <= int(ext) <= 16]
     print(f"🔍 Extensiones excluidas recibidas: {exclude_extensions}")
     active_extensions = [ext for ext in extorder if ext not in exclude_extensions]
+    print(f"🔍 Extensiones activas tras exclusión: {active_extensions}")
 
     if not active_extensions:
         print("❌ Error: Todas las extensiones fueron excluidas.")
         return
 
-    # Procesar cada archivo científico
     combined_images = []
     for file in corrected_files:
+        print(f"\n📂 Procesando archivo: {file}")
         with fits.open(file) as hdul:
-            # Obtener dimensiones y headers
             nrows = int(hdul[1].header.get('NAXIS2', 1200))
             ncols = int(hdul[1].header.get('NAXIS1', 900))
             primary_hdr = hdul[0].header.copy()
             image_hdr = hdul[1].header.copy()
 
-            # Inicializar matriz para promediar extensiones
             valid_data = []
             valid_exts = []
             for ext in active_extensions:
-                if ext >= len(hdul) or hdul[ext].data is None:
-                    print(f"⚠️ Extensión {ext} no válida en {file}. Saltando.")
+                if ext >= len(hdul):
+                    print(f"❌ Ext {ext} no existe en {file} (len={len(hdul)})")
                     continue
+                if hdul[ext].data is None:
+                    print(f"❌ Ext {ext} está vacía en {file}")
+                    continue
+
                 image_data = hdul[ext].data.astype(float)
                 if image_data.shape != (nrows, ncols):
-                    print(f"⚠️ Dimensiones incorrectas en ext {ext} de {file} (esperado: [{ncols}, {nrows}], obtenido: {image_data.shape}). Saltando.")
+                    print(f"⚠️ Dimensiones incorrectas en ext {ext} de {file}. "
+                          f"Esperado=({nrows},{ncols}), obtenido={image_data.shape}")
                     continue
+
+                print(f"✅ Ext {ext} válida con shape {image_data.shape}")
                 valid_data.append(image_data)
                 valid_exts.append(ext)
 
             if not valid_data:
-                print(f"⚠️ No hay datos válidos para {file}.")
+                print(f"⚠️ No hay extensiones válidas en {file}.")
                 continue
 
-            # Promediar las extensiones válidas
+            # --- Combinación de extensiones ---
             if comb_mode == 'simple':
                 combined_image = np.mean(valid_data, axis=0)
+                print(f"ℹ️ Combinación simple de {len(valid_exts)} extensiones")
+
             elif comb_mode == 'weighted':
                 if weights is not None and len(weights) == 16:
-                    # Usar pesos precalculados
-                    valid_weights = [weights[extorder.index(ext)] for ext in valid_exts]
-                    if sum(valid_weights) == 0:
-                        print(f"⚠️ Pesos nulos para {file}. Usando modo simple.")
+                    # Dos interpretaciones: ext-1 o extorder
+                    try:
+                        cand1 = [float(weights[ext - 1]) for ext in valid_exts]
+                    except Exception:
+                        cand1 = None
+                    try:
+                        cand2 = [float(weights[extorder.index(ext)]) for ext in valid_exts]
+                    except Exception:
+                        cand2 = None
+
+                    if cand1 and sum(cand1) > 0:
+                        valid_weights = np.array(cand1)
+                        used_mapping = "ext->index (weights[ext-1])"
+                    elif cand2 and sum(cand2) > 0:
+                        valid_weights = np.array(cand2)
+                        used_mapping = "extorder mapping"
+                    else:
+                        valid_weights = None
+                        used_mapping = "none"
+
+                    if valid_weights is None or valid_weights.sum() == 0:
+                        print(f"⚠️ Pesos no válidos ({used_mapping}). Usando simple.")
                         combined_image = np.mean(valid_data, axis=0)
                     else:
-                        # Normalizar pesos para las extensiones activas
-                        valid_weights = np.array(valid_weights) / np.sum(valid_weights)
+                        valid_weights /= valid_weights.sum()
+                        print(f"ℹ️ Usando pesos con mapeo: {used_mapping}")
                         combined_image = np.average(valid_data, axis=0, weights=valid_weights)
+
                 else:
                     # Calcular SNR internamente
-                    sig_box = (890, 274, 990, 374)
+                    sig_box = (460, 257, 510, 280)
                     r1_s, c1_s, r2_s, c2_s = sig_box
                     if r2_s > nrows or c2_s > ncols:
-                        print(f"⚠️ sig_box {sig_box} fuera de rango (shape: [{nrows}, {ncols}]). Usando modo simple.")
+                        print(f"⚠️ sig_box fuera de rango {sig_box}, usando simple")
                         combined_image = np.mean(valid_data, axis=0)
                     else:
                         D = [img[r1_s:r2_s, c1_s:c2_s].ravel() for img in valid_data]
                         snr = [np.nanmean(d) / np.nanstd(d) if np.nanstd(d) > 0 else 0 for d in D]
                         weights_snr = np.array(snr) / np.sum(snr) if np.sum(snr) > 0 else np.ones(len(D)) / len(D)
+                        print(f"ℹ️ Pesos calculados por SNR: {np.round(weights_snr,3)}")
                         combined_image = np.average(valid_data, axis=0, weights=weights_snr)
             else:
-                print(f"⚠️ Modo {comb_mode} no reconocido. Usando modo simple.")
+                print(f"⚠️ Modo {comb_mode} no reconocido. Usando simple.")
                 combined_image = np.mean(valid_data, axis=0)
+
             combined_images.append(combined_image)
 
     if not combined_images:
-        print("⚠️ No se pudieron combinar imágenes: no hay datos válidos.")
-        return
+        print("❌ No se pudieron combinar imágenes: no hay datos válidos en NINGÚN archivo.")
+        return  # 🚫 No guardamos FITS vacío
 
-    # Promediar todas las imágenes (si hay múltiples archivos)
     final_image = np.mean(combined_images, axis=0)
-
-    # Guardar como FITS
     primary_hdu = fits.PrimaryHDU(header=primary_hdr)
     image_hdu = fits.ImageHDU(data=final_image, header=image_hdr)
     image_hdu.header['HISTORY'] = f"Averaged {len(valid_exts)} extensions from {len(combined_images)} sci images, mode: {comb_mode}, excluded: {exclude_extensions}"
     hdu = fits.HDUList([primary_hdu, image_hdu])
     hdu.writeto(output_file, overwrite=True)
-    print(f"✅ Imagen combinada guardada: {output_file}")
+    print(f"\n✅ Imagen combinada guardada: {output_file}")
 
-def optimize_weights_from_raw(raw_file, exclude_extensions=[]):
+def optimize_weights_from_raw(raw_file, exclude_extensions=[], visualize_rois=True):
     """
-    Calcula pesos optimizados por SNR para las 16 extensiones de una imagen FITS raw.
-
-    Args:
-        raw_file (str): Ruta al archivo FITS raw.
-        exclude_extensions (list): Lista de extensiones (1-16) a excluir (peso=0).
-
-    Returns:
-        list: Pesos optimizados (longitud 16), con 0 para extensiones excluidas o inválidas.
+    Calcula pesos optimizados por SNR para las 16 extensiones de un FITS raw.
+    Las ROIs se definen en el formato esperado por roi_shifting: col1, col2, row1, row2.
     """
-    # Obtener orden de extensiones
-    _, extorder = roi_shifting([0, 0, 0, 0], return_extensions_order=True)
     exclude_extensions = [int(ext) for ext in exclude_extensions if 1 <= int(ext) <= 16]
     if exclude_extensions:
         print(f"Excluyendo extensiones: {exclude_extensions}")
 
-    # Inicializar pesos con ceros
     weights = [0.0] * 16
-    active_extensions = [ext for ext in extorder if ext not in exclude_extensions]
-
-    if not active_extensions:
-        print("❌ Error: Todas las extensiones fueron excluidas.")
-        return weights
 
     with fits.open(raw_file) as hdul:
-        # Dimensiones de la imagen raw
         nrows = int(hdul[1].header.get('NAXIS2', 1100))
         ncols = int(hdul[1].header.get('NAXIS1', 895))
 
-        # Definir regiones base (ajustadas para coincidir con imágenes corregidas)
-        sig_box_base = [28, 512, 0, nrows]  # [28:512, 0:400] = [1:485] en DS9
-        ov_box_base = [575, 600, 10, nrows - 10]  # Overscan ajustado
+        # ROIs en orden natural (1→16)
+        sig_box_base = [375, 410, 470, 510]
+        ov_box_base = [575, 600, 10, nrows - 10] #[315, 355, 350, 390]
+
         sig_boxes, _ = roi_shifting(sig_box_base, return_extensions_order=True)
         ov_boxes, _ = roi_shifting(ov_box_base, return_extensions_order=True)
 
-        # Extraer datos
         data = []
-        valid_indices = []
-        for i, ext in enumerate(active_extensions):
-            if ext >= len(hdul) or hdul[ext].data is None:
-                print(f"⚠️ Extensión {ext} no válida en {raw_file}. Saltando.")
+        D, X = [], []
+
+        for i in range(16):  # extensiones 1→16
+            ext = i + 1
+            if ext in exclude_extensions or ext >= len(hdul) or hdul[ext].data is None:
                 continue
+
             img = hdul[ext].data.astype(float)
-            r1_s, r2_s, c1_s, c2_s = sig_boxes[extorder.index(ext)]
-            r1_x, r2_x, c1_x, c2_x = ov_boxes[extorder.index(ext)]
-            # Ajustar ROIs para no exceder dimensiones
-            r2_s = min(r2_s, ncols)
-            c2_s = min(c2_s, nrows)
-            r2_x = min(r2_x, ncols)
-            c2_x = min(c2_x, nrows)
-            r1_s = max(r1_s, 0)
-            c1_s = max(c1_s, 0)
-            r1_x = max(r1_x, 0)
-            c1_x = max(c1_x, 0)
-            # Verificar que las regiones sean válidas
+            c1_s, c2_s, r1_s, r2_s = sig_boxes[i]
+            c1_x, c2_x, r1_x, r2_x = ov_boxes[i]
+
+            # Ajustar límites
+            c2_s, r2_s = min(c2_s, ncols), min(r2_s, nrows)
+            c2_x, r2_x = min(c2_x, ncols), min(r2_x, nrows)
+            c1_s, r1_s = max(c1_s, 0), max(r1_s, 0)
+            c1_x, r1_x = max(c1_x, 0), max(r1_x, 0)
+
             if r2_s <= r1_s or c2_s <= c1_s or r2_x <= r1_x or c2_x <= c1_x:
-                print(f"⚠️ ROI inválido sig_box={sig_boxes[extorder.index(ext)]} o ov_box={ov_boxes[extorder.index(ext)]} para ext {ext}. Saltando.")
                 continue
+
             data.append(img)
-            valid_indices.append(i)
+            D.append(img[r1_s:r2_s, c1_s:c2_s].ravel())
+            X.append(img[r1_x:r2_x, c1_x:c2_x].ravel())
 
         if not data:
-            print(f"⚠️ No hay datos válidos para {raw_file}. Retornando pesos uniformes.")
-            n_active = len(active_extensions)
-            for i, ext in enumerate(extorder):
-                weights[i] = 1.0 / n_active if ext in active_extensions else 0.0
+            print("⚠️ No hay datos válidos. Pesos uniformes.")
+            n_active = 16 - len(exclude_extensions)
+            for i in range(16):
+                weights[i] = 1.0 / n_active if (i + 1) not in exclude_extensions else 0.0
             return weights
 
-        # Extraer regiones de señal y overscan
-        D = [data[i][c1_s:c2_s, r1_s:r2_s].ravel() for i, (r1_s, r2_s, c1_s, c2_s) in enumerate([sig_boxes[extorder.index(ext)] for ext in active_extensions]) if i in valid_indices]
-        X = [data[i][c1_x:c2_x, r1_x:r2_x].ravel() for i, (r1_x, r2_x, c1_x, c2_x) in enumerate([ov_boxes[extorder.index(ext)] for ext in active_extensions]) if i in valid_indices]
+        # Visualización opcional
+        if visualize_rois:
+            fig, ax, im_disp = show_fits_image(data[0])
+            rect_sig = Rectangle((0, 0), 1, 1, edgecolor='red', facecolor='none', lw=2, label='Señal')
+            rect_ov = Rectangle((0, 0), 1, 1, edgecolor='blue', facecolor='none', lw=2, label='Overscan')
+            ax.add_patch(rect_sig)
+            ax.add_patch(rect_ov)
+            ax.legend()
+            ax.set_title("Extensión 1")
 
-        # Definir función objetivo (negativo del SNR)
+            slider_ax = plt.axes([0.2, 0.05, 0.6, 0.03])
+            slider = Slider(slider_ax, 'Extensión', 0, len(data) - 1, valinit=0, valstep=1)
+
+            def update(val):
+                idx = int(slider.val)
+                im_disp.set_data(data[idx])
+                c1_s, c2_s, r1_s, r2_s = sig_boxes[idx]
+                c1_x, c2_x, r1_x, r2_x = ov_boxes[idx]
+                rect_sig.set_bounds(c1_s, r1_s, c2_s - c1_s, r2_s - r1_s)
+                rect_ov.set_bounds(c1_x, r1_x, c2_x - c1_x, r2_x - r1_x)
+                ax.set_title(f"Extensión {idx+1}")
+                fig.canvas.draw_idle()
+
+            slider.on_changed(update)
+            plt.show()
+
+        # Optimización
         def neg_snr(k):
             Dtot = sum(k[i] * D[i] for i in range(len(D)))
             Xtot = sum(k[i] * X[i] for i in range(len(X)))
             std_x = np.std(Xtot, ddof=1)
-            if std_x <= 0:
-                return 0  # Evitar división por cero
+            if std_x <= 0: return 0
             return -((np.mean(Dtot) - np.mean(Xtot)) / std_x)
 
-        # Restricciones y límites
         cons = ({'type': 'eq', 'fun': lambda k: np.sum(k) - 1},)
         bounds = [(0.0, 1.0)] * len(D)
-        k0 = np.ones(len(D), dtype=float) / len(D)  # Suposición inicial: uniforme
+        k0 = np.ones(len(D)) / len(D)
 
-        # Optimizar
         res = minimize(neg_snr, k0, method='SLSQP', bounds=bounds, constraints=cons,
                        options={'ftol': 1e-9, 'disp': True, 'maxiter': 500})
 
         if not res.success:
-            print(f"⚠️ Optimización fallida para {raw_file}: {res.message}. Usando pesos uniformes.")
-            n_active = len(active_extensions)
-            for i, ext in enumerate(extorder):
-                weights[i] = 1.0 / n_active if ext in active_extensions else 0.0
+            print(f"⚠️ Optimización fallida: {res.message}. Pesos uniformes.")
+            n_active = len(D)
+            for i in range(16):
+                weights[i] = 1.0 / n_active if (i + 1) not in exclude_extensions else 0.0
         else:
             print(f"Optimal SNR: {-res.fun:.4f}, Weights: {res.x}")
-            # Mapear pesos optimizados a la lista completa
-            for i, idx in enumerate(valid_indices):
-                ext = active_extensions[idx]
-                weights[extorder.index(ext)] = res.x[i]
+            j = 0
+            for i in range(16):
+                if (i + 1) not in exclude_extensions and j < len(res.x):
+                    weights[i] = res.x[j]
+                    j += 1
 
     return weights
 
