@@ -12,6 +12,68 @@ from sklearn.linear_model import LinearRegression
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Slider
 
+def get_roi_info(file_path, sci_file=None):
+    """
+    Lee la información de ROI desde el encabezado de una imagen FITS.
+
+    Args:
+        file_path (str): Ruta al archivo FITS (bias, flat o ciencia).
+        sci_file (str, optional): Ruta a una imagen científica para alinear el ROI.
+
+    Returns:
+        tuple: (skiprow, nrows, ncols, is_roi)
+            - skiprow (int): Fila inicial del corte (0 si no es ROI).
+            - nrows (int): Número de filas.
+            - ncols (int): Número de columnas.
+            - is_roi (bool): True si la imagen es ROI.
+    """
+    NAXIS2_MAX = 1200
+    NAXIS1_MAX = 900
+
+    try:
+        skiprow, nrows, ncols, is_roi = 0, NAXIS2_MAX, NAXIS1_MAX, False
+        with fits.open(file_path, mode='readonly') as hdul:
+            # Buscar la primera extensión válida
+            for hdu in hdul[1:]:
+                if hdu.data is not None:
+                    skiprow = int(hdu.header.get('SKIPROW', 0))
+                    nrows = int(hdu.header.get('NAXIS2', NAXIS2_MAX))
+                    ncols = int(hdu.header.get('NAXIS1', NAXIS1_MAX))
+                    is_roi = skiprow > 0 or nrows < NAXIS2_MAX or hdu.header.get('ROI', False) or hdu.header.get('WINDOW', False)
+                    break
+
+        # Si es un archivo corregido, alinear con imagen científica
+        if sci_file and os.path.basename(file_path).startswith('o_'):
+            with fits.open(sci_file, mode='readonly') as sci_hdul:
+                for hdu in sci_hdul[1:]:
+                    if hdu.data is not None:
+                        skiprow = int(hdu.header.get('SKIPROW', 0))
+                        nrows = int(hdu.header.get('NAXIS2', NAXIS2_MAX))
+                        ncols = int(hdu.header.get('NAXIS1', NAXIS1_MAX))
+                        is_roi = skiprow > 0 or nrows < NAXIS2_MAX or hdu.header.get('ROI', False) or hdu.header.get('WINDOW', False)
+                        break
+
+        # Validaciones
+        if skiprow < 0 or skiprow >= NAXIS2_MAX:
+            print(f"⚠️ SKIPROW inválido ({skiprow}) en {file_path}. Asumiendo 0.")
+            skiprow = 0
+        if nrows <= 0 or nrows > NAXIS2_MAX:
+            print(f"⚠️ NAXIS2 inválido ({nrows}) en {file_path}. Ajustando a {NAXIS2_MAX}.")
+            nrows = NAXIS2_MAX
+        if ncols <= 0 or ncols > NAXIS1_MAX:
+            print(f"⚠️ NAXIS1 inválido ({ncols}) en {file_path}. Ajustando a {NAXIS1_MAX}.")
+            ncols = NAXIS1_MAX
+        if skiprow + nrows > NAXIS2_MAX:
+            print(f"⚠️ ROI fuera de rango ({skiprow}+{nrows}) en {file_path}. Ajustando nrows.")
+            nrows = NAXIS2_MAX - skiprow
+
+        print(f"🔍 ROI info para {file_path}: skiprow={skiprow}, nrows={nrows}, ncols={ncols}, is_roi={is_roi}, rango=[{skiprow}:{skiprow + nrows}]")
+        return skiprow, nrows, ncols, is_roi
+
+    except Exception as e:
+        print(f"⚠️ Error al leer ROI en {file_path}: {e}. Asumiendo imagen completa.")
+        return 0, NAXIS2_MAX, NAXIS1_MAX, False
+
 def roi_shifting(roi, return_extensions_order=False):
     """
     Shift an ROI vector to align the prescans of the MAS sensor channels.
@@ -284,7 +346,7 @@ def combine_science_images(corrected_files, output_file, exclude_extensions=None
     hdu.writeto(output_file, overwrite=True)
     print(f"\n✅ Imagen combinada guardada: {output_file}")
 
-def optimize_weights_from_raw(raw_file, exclude_extensions=[], visualize_rois=True):
+def optimize_weights_from_raw(raw_file, sig_box_base=None, exclude_extensions=[], visualize_rois=True):
     """
     Calcula pesos optimizados por SNR para las 16 extensiones de un FITS raw.
     Las ROIs se definen en el formato esperado por roi_shifting: col1, col2, row1, row2.
@@ -299,8 +361,9 @@ def optimize_weights_from_raw(raw_file, exclude_extensions=[], visualize_rois=Tr
         nrows = int(hdul[1].header.get('NAXIS2', 1100))
         ncols = int(hdul[1].header.get('NAXIS1', 895))
 
-        # ROIs en orden natural (1→16)
-        sig_box_base = [375, 410, 470, 510]
+        # ROIs en orden natural (1 -> 16)
+        if sig_box_base is None:
+            sig_box_base = [375, 410, 470, 510] #modify
         ov_box_base = [575, 600, 10, nrows - 10] #[315, 355, 350, 390]
 
         sig_boxes, _ = roi_shifting(sig_box_base, return_extensions_order=True)

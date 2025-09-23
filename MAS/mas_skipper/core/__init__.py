@@ -11,5 +11,6 @@ from .core import (
     obtain_fw_data,
     roi_shifting_from_header,
     optimize_weights_from_raw,
-    show_fits_image
+    show_fits_image,
+    get_roi_info
 )

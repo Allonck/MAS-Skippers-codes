@@ -5,87 +5,123 @@ from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
 from astropy.wcs import WCS
 from astroscrappy import detect_cosmics
-from ..core.core import roi_shifting
+from ..core.core import roi_shifting, get_roi_info
 
-def overscan_correction_combined(input_file, output_file, roi_vector, method='mean'):
+def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=None, method='mean'):
     """
-    Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta el overscan.
+    Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta al ROI activo.
+
+    Si is_roi=False (por defecto), se usa el ROI estándar [28,539,0,1024].
+    Si is_roi=True, se ajusta dinámicamente según la imagen científica.
 
     Args:
         input_file (str): Ruta al archivo FITS de entrada.
-        output_file (str): Ruta al archivo FITS de salida (e.g., 'o_input.fits').
-        roi_vector (list): Lista de ROIs para cada extensión.
-        method (str): Metodo de corrección ('mean' o 'poly').
-
-    Returns:
-        None. Guarda el archivo corregido y recortado.
+        output_file (str): Ruta al archivo FITS de salida.
+        roi_vector (list): Lista de ROIs de overscan por extensión (x_start, x_end, y_start, y_end).
+        sci_file (str, optional): Imagen científica para alinear el ROI.
+        method (str): Método de corrección ('mean' o 'poly').
     """
-    # ROI activo fijo para la primera extensión
-    active_roi_base = [28, 539, 0, 1024]
-    # Obtener ROIs activos para todas las extensiones
+    # Obtener información de ROI y tamaño según imagen científica si se provee
+    skiprow, nrows, ncols, is_roi = get_roi_info(input_file if sci_file is None else sci_file, sci_file=sci_file)
+
+    # Definir ROI activo según tipo de imagen
+    if is_roi:
+        active_roi_base = [28, ncols - 28, 0, nrows]
+    else:
+        active_roi_base = [28, 539, 0, 1024]
+
     active_rois = roi_shifting(active_roi_base)
 
     with fits.open(input_file, mode='readonly') as hdul:
-        hdu_list = fits.HDUList()
-        hdu_list.append(hdul[0].copy())  # Copiar header primario
-        for ext, roi in enumerate(roi_vector, start=1):
+        n_ext = len(hdul) - 1
+        if n_ext != 16:
+            print(f"⚠️ El archivo {input_file} tiene {n_ext} extensiones, se esperaban 16.")
+
+        master_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul[0].header.copy())])
+
+        for ext in range(1, n_ext + 1):
             if ext >= len(hdul) or hdul[ext].data is None:
+                print(f"⚠️ Ext {ext} ausente en {input_file}. Saltando.")
                 continue
-            data = hdul[ext].data
-            overscan_region = data[roi[2]:roi[3], roi[0]:roi[1]]
+
+            data = hdul[ext].data.astype(float)
+            roi = roi_vector[ext - 1]
+            x_start, x_end, y_start, y_end = roi
+            active_roi = active_rois[ext - 1]
+
+            # Calcular overscan
+            overscan_region = data[y_start:y_end, x_start:x_end]
             if method == 'mean':
                 overscan_value = np.mean(overscan_region)
+            elif method == 'poly':
+                coeffs = np.polyfit(np.arange(overscan_region.shape[0]),
+                                    np.mean(overscan_region, axis=1), 1)
+                overscan_value = np.polyval(coeffs, np.arange(data.shape[0]))[:, np.newaxis]
             else:
-                # Implementación con ajuste polinómico (simplificado)
-                x = np.arange(overscan_region.shape[1])
-                coeffs = np.polyfit(x, np.mean(overscan_region, axis=0), 1)
-                overscan_value = np.polyval(coeffs, x).mean()
+                raise ValueError("Método de overscan inválido. Usa 'mean' o 'poly'.")
+
+            # Corregir y recortar
             corrected_data = data - overscan_value
-            print(f"✅ Ext {ext}: Overscan = {overscan_value:.3f}")
 
-            # Recortar el overscan usando el ROI activo
-            active_roi = active_rois[ext-1]
-            x_start, x_end, y_start, y_end = active_roi
-            if (y_end > corrected_data.shape[0]) or (x_end > corrected_data.shape[1]):
-                print(f"⚠️ ROI activo fuera de rango en ext {ext} de {input_file} (shape: {corrected_data.shape}, ROI: [{x_start}:{x_end}, {y_start}:{y_end}]). Saltando recorte.")
-                trimmed_data = corrected_data
-            else:
-                trimmed_data = corrected_data[y_start:y_end, x_start:x_end]
+            # Evitar recortes fuera de rango
+            y0, y1, x0, x1 = active_roi[2], active_roi[3], active_roi[0], active_roi[1]
+            y1 = min(y1, corrected_data.shape[0])
+            x1 = min(x1, corrected_data.shape[1])
+            trimmed_data = corrected_data[y0:y1, x0:x1]
 
-            hdu = fits.ImageHDU(data=trimmed_data, header=hdul[ext].header)
-            hdu.header['HISTORY'] = f'Overscan correction applied using {method} and trimmed'
-            hdu.header['DATASEC'] = f"[{active_roi_base[0] - 27}:{active_roi_base[1] - 27},{active_roi_base[2] + 1}:{active_roi_base[3]}]"
-            hdu_list.append(hdu)
-        hdu_list.writeto(output_file, overwrite=True)
-    print(f"✅ Overscan corregido y recortado: {output_file}")
+            header = hdul[ext].header.copy()
+            header['HISTORY'] = f'Overscan corregido con metodo {method}'
+            header['NAXIS2'] = trimmed_data.shape[0]
+            header['NAXIS1'] = trimmed_data.shape[1]
+            header['SKIPROW'] = skiprow
+            header['ROI'] = is_roi
+            header['EXTNAME'] = f'EXT{ext}'
 
+            master_hdul.append(fits.ImageHDU(data=trimmed_data, header=header))
+            print(f"✅ Ext {ext}: Overscan = {overscan_value[0] if method=='poly' else overscan_value:.3f}, "
+                  f"Recortado a {trimmed_data.shape}")
 
-def create_master_bias(bias_files, output_file, combine_type='median', sigma_clip_enabled=True, sigma=3.0, maxiters=5):
+        master_hdul.writeto(output_file, overwrite=True)
+        print(f"💾 Overscan corregido y recortado guardado: {output_file}")
+
+def create_master_bias(bias_files, output_file, sci_file=None, combine_type='median',
+                       sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """
-    Crea un master bias combinando múltiples bias corregidos por overscan, por extensión.
-    Copia el encabezado del primer archivo bias para cada extensión.
+    Crea un master bias combinando múltiples archivos bias corregidos por overscan.
+
+    - Si is_roi=False (por defecto), combina las extensiones completas.
+    - Si is_roi=True, recorta cada extensión al ROI detectado desde sci_file antes de combinar.
 
     Args:
-        bias_files (list): Lista de archivos bias corregidos.
-        output_file (str): Ruta para guardar el master bias.
+        bias_files (list): Lista de archivos bias FITS.
+        output_file (str): Ruta de salida para el master bias.
+        sci_file (str, optional): Imagen científica para alinear el ROI.
         combine_type (str): 'median' o 'mean'.
-        sigma_clip_enabled (bool): Si se aplica sigma clipping antes de combinar.
+        sigma_clip_enabled (bool): Si True, aplica sigma-clipping.
         sigma (float): Umbral sigma.
-        maxiters (int): Iteraciones para clipping.
-
-    Returns:
-        None
+        maxiters (int): Máx iteraciones para sigma-clipping.
     """
     if not bias_files:
         raise ValueError("No se entregaron archivos bias.")
 
-    print(f"📥 Cargando {len(bias_files)} archivos bias...")
+    print(f"📥 Procesando {len(bias_files)} archivos bias...")
 
-    # Asumimos que todos tienen la misma cantidad de extensiones.
-    with fits.open(bias_files[0]) as hdul_ref:
-        n_ext = len(hdul_ref) - 1
+    # Obtener información de ROI
+    skiprow, nrows, ncols, is_roi = get_roi_info(bias_files[0], sci_file=sci_file)
 
-    master_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul_ref[0].header.copy())])
+    if is_roi and sci_file is not None:
+        # Recortamos solo si hay ROI real
+        active_roi_base = [28, ncols - 28, 0, nrows]
+        active_rois = roi_shifting(active_roi_base)
+    else:
+        # No recortar; usar extensiones completas
+        active_rois = None
+        is_roi = False
+
+    with fits.open(bias_files[0]) as hdul:
+        n_ext = len(hdul) - 1
+
+    master_hdul = fits.HDUList([fits.PrimaryHDU()])
 
     for ext in range(1, n_ext + 1):
         stack = []
@@ -94,45 +130,46 @@ def create_master_bias(bias_files, output_file, combine_type='median', sigma_cli
         for fname in bias_files:
             with fits.open(fname) as hdul:
                 if ext >= len(hdul) or hdul[ext].data is None:
-                    print(f"⚠️ Ext {ext} ausente en {fname}. Saltando.")
                     continue
-
                 data = hdul[ext].data.astype(float)
-                stack.append(data)
 
+                if is_roi:
+                    x0, x1, y0, y1 = active_rois[ext - 1]
+                    # Evitar recortes fuera de rango
+                    y1 = min(y1, data.shape[0])
+                    x1 = min(x1, data.shape[1])
+                    data = data[y0:y1, x0:x1]
+
+                stack.append(data)
                 if ref_header is None:
                     ref_header = hdul[ext].header.copy()
 
-        if len(stack) == 0:
-            print(f"❌ No se pudo crear master bias para ext {ext}. No hay datos.")
+        if not stack:
+            print(f"❌ No se pudo crear master bias para ext {ext}")
             continue
 
         stack = np.array(stack)
-
         if sigma_clip_enabled:
-            clipped = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters)
-            stack = clipped.data
+            stack = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters).data
             print(f"✂️ Sigma clip aplicado en ext {ext} con σ={sigma}")
 
-        if combine_type == 'median':
-            combined = np.median(stack, axis=0)
-        elif combine_type == 'mean':
-            combined = np.mean(stack, axis=0)
-        else:
-            raise ValueError("Tipo de combinación inválido. Usa 'mean' o 'median'.")
+        combined = np.median(stack, axis=0) if combine_type == 'median' else np.mean(stack, axis=0)
 
-        # Añadir EXTNAME si no está ya en el header
         if ref_header is None:
             ref_header = fits.Header()
         ref_header['EXTNAME'] = f'BIAS{ext}'
         ref_header['HISTORY'] = f"Master bias de {len(stack)} archivos"
+        if is_roi:
+            ref_header['HISTORY'] = f", trimmed to ROI [{x0}:{x1},{y0}:{y1}]"
+        ref_header['NAXIS2'], ref_header['NAXIS1'] = combined.shape
+        ref_header['SKIPROW'] = skiprow
+        ref_header['ROI'] = is_roi
 
         master_hdul.append(fits.ImageHDU(data=combined, header=ref_header))
         print(f"✅ Master bias creado para ext {ext}")
 
     master_hdul.writeto(output_file, overwrite=True)
     print(f"💾 Master bias guardado: {output_file}")
-
 
 def bias_subtraction(input_file, master_bias, output_file):
     """
@@ -159,81 +196,92 @@ def bias_subtraction(input_file, master_bias, output_file):
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Bias restado: {output_file}")
 
-
-def create_master_dark(dark_files, output_file, combine_type='median',
+def create_master_dark(dark_files, output_file, sci_file=None, combine_type='median',
                        sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """
-    Crea un master dark combinando múltiples darks corregidos por overscan y bias,
-    para cada extensión de un CCD.
+    Crea un master dark combinando múltiples archivos dark corregidos por overscan y bias.
+
+    - Si is_roi=False (por defecto), combina las extensiones completas.
+    - Si is_roi=True, recorta cada extensión al ROI detectado desde sci_file antes de combinar.
 
     Args:
-        dark_files (list): Lista de archivos dark corregidos.
-        output_file (str): Ruta para guardar el master dark.
+        dark_files (list): Lista de archivos dark FITS.
+        output_file (str): Ruta de salida para el master dark.
+        sci_file (str, optional): Imagen científica para alinear el ROI.
         combine_type (str): 'median' o 'mean'.
-        sigma_clip_enabled (bool): Si se aplica sigma clipping antes de combinar.
+        sigma_clip_enabled (bool): Si True, aplica sigma-clipping.
         sigma (float): Umbral sigma.
-        maxiters (int): Iteraciones para clipping.
-
-    Returns:
-        None
+        maxiters (int): Máx iteraciones para sigma-clipping.
     """
     if not dark_files:
         raise ValueError("No se entregaron archivos dark.")
 
-    print(f"📥 Cargando {len(dark_files)} archivos dark...")
+    print(f"📥 Procesando {len(dark_files)} archivos dark...")
 
-    # Asumimos que todos tienen la misma cantidad de extensiones
-    with fits.open(dark_files[0]) as hdul_ref:
-        n_ext = len(hdul_ref) - 1
+    # Obtener información de ROI
+    skiprow, nrows, ncols, is_roi = get_roi_info(dark_files[0], sci_file=sci_file)
 
-    master_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul_ref[0].header.copy())])
+    if is_roi and sci_file is not None:
+        # Recortamos solo si hay ROI real
+        active_roi_base = [28, ncols - 28, 0, nrows]
+        active_rois = roi_shifting(active_roi_base)
+    else:
+        # No recortar; usar extensiones completas
+        active_rois = None
+        is_roi = False
 
-    for ext in range(1, n_ext + 1):
+    with fits.open(dark_files[0]) as hdul:
+        n_ext = len(hdul) - 1
+
+    master_hdul = fits.HDUList([fits.PrimaryHDU()])
+
+    for ext in range(1, n_ext+1):
         stack = []
         ref_header = None
 
         for fname in dark_files:
             with fits.open(fname) as hdul:
                 if ext >= len(hdul) or hdul[ext].data is None:
-                    print(f"⚠️ Ext {ext} ausente en {fname}. Saltando.")
                     continue
-
                 data = hdul[ext].data.astype(float)
-                stack.append(data)
 
+                if is_roi:
+                    x0, x1, y0, y1 = active_rois[ext-1]
+                    # Evitar recortes fuera de rango
+                    y1 = min(y1, data.shape[0])
+                    x1 = min(x1, data.shape[1])
+                    data = data[y0:y1, x0:x1]
+
+                stack.append(data)
                 if ref_header is None:
                     ref_header = hdul[ext].header.copy()
 
-        if len(stack) == 0:
-            print(f"❌ No se pudo crear master dark para ext {ext}. No hay datos.")
+        if not stack:
+            print(f"❌ No se pudo crear master dark para ext {ext}")
             continue
 
         stack = np.array(stack)
-
         if sigma_clip_enabled:
-            clipped = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters)
-            stack = clipped.data
+            stack = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters).data
             print(f"✂️ Sigma clip aplicado en ext {ext} con σ={sigma}")
 
-        if combine_type == 'median':
-            combined = np.median(stack, axis=0)
-        elif combine_type == 'mean':
-            combined = np.mean(stack, axis=0)
-        else:
-            raise ValueError("Tipo de combinación inválido. Usa 'mean' o 'median'.")
+        combined = np.median(stack, axis=0) if combine_type=='median' else np.mean(stack, axis=0)
 
-        # Añadir EXTNAME si no está ya en el header
         if ref_header is None:
             ref_header = fits.Header()
         ref_header['EXTNAME'] = f'DARK{ext}'
         ref_header['HISTORY'] = f"Master dark de {len(stack)} archivos"
+        if is_roi:
+            ref_header['HISTORY'] = f", trimmed to ROI [{x0}:{x1},{y0}:{y1}]"
+        ref_header['NAXIS2'], ref_header['NAXIS1'] = combined.shape
+        ref_header['SKIPROW'] = skiprow
+        ref_header['ROI'] = is_roi
 
         master_hdul.append(fits.ImageHDU(data=combined, header=ref_header))
         print(f"✅ Master dark creado para ext {ext}")
 
     master_hdul.writeto(output_file, overwrite=True)
     print(f"💾 Master dark guardado: {output_file}")
-
 
 def dark_subtraction(input_file, master_dark, output_file):
     """
@@ -329,98 +377,111 @@ def dark_subtraction(input_file, master_dark, output_file):
 #     master_hdul.writeto(output_file, overwrite=True)
 #     print(f"💾 Master flat guardado: {output_file}")
 
-def create_master_flat_normalized(flat_files, master_bias_path, output_file, combine_type='median',
-                                  sigma_clip_enabled=True, sigma=3.0, maxiters=5, use_dark=False,
-                                  master_dark_path=None):
+def create_master_flat_normalized(flat_files, master_bias_file, output_file,
+                                  sci_file=None, use_dark=False, master_dark_path=None,
+                                  combine_type='median', sigma_clip_enabled=True,
+                                  sigma=3.0, maxiters=5):
     """
-    Crea un master flat normalizado a partir de archivos flat corregidos por bias y opcionalmente por dark.
+    Crea un master flat normalizado a partir de archivos flat corregidos por bias
+    y opcionalmente por dark.
+
+    - Si is_roi=False (por defecto), combina las extensiones completas.
+    - Si is_roi=True, recorta cada extensión al ROI detectado desde sci_file antes de combinar.
 
     Args:
-        flat_files (list): Lista de archivos flat.
-        master_bias_path (str): Ruta al master bias (usado para corregir flats).
-        output_file (str): Ruta para guardar el master flat normalizado.
-        combine_type (str): Metodo de combinación: 'median' o 'mean'.
-        sigma_clip_enabled (bool): Si aplicar sigma clipping antes de combinar.
-        sigma (float): Sigma para el sigma clipping.
-        maxiters (int): Iteraciones máximas para sigma clipping.
-        use_dark (bool): Si restar el master dark a los flats.
-        master_dark_path (str): Ruta al master dark (requerido si use_dark=True).
-
-    Returns:
-        None
+        flat_files (list): Lista de flats.
+        master_bias_file (str): Master bias para corregir flats.
+        output_file (str): Ruta de salida para el master flat.
+        sci_file (str, optional): Imagen científica para alinear el ROI.
+        use_dark (bool): Si True, resta master dark.
+        master_dark_path (str, optional): Ruta del master dark.
+        combine_type (str): 'median' o 'mean'.
+        sigma_clip_enabled (bool): Si True, aplica sigma-clipping.
+        sigma (float): Umbral sigma.
+        maxiters (int): Máx iteraciones para sigma-clipping.
     """
     if not flat_files:
         raise ValueError("No se entregaron archivos flat.")
     if use_dark and not master_dark_path:
         raise ValueError("Se requiere master_dark_path si use_dark=True.")
 
-    print(f"📥 Procesando {len(flat_files)} archivos flat...")
+    # Información de ROI
+    skiprow, nrows, ncols, is_roi = get_roi_info(flat_files[0], sci_file=sci_file)
+    if is_roi and sci_file is not None:
+        active_roi_base = [28, ncols - 28, 0, nrows]
+        active_rois = roi_shifting(active_roi_base)
+    else:
+        active_rois = None
+        is_roi = False
+
     with fits.open(flat_files[0]) as hdul:
         n_ext = len(hdul) - 1
-        if n_ext != 16:
-            print(f"⚠️ El archivo flat {flat_files[0]} tiene {n_ext} extensiones, se esperaban 16.")
+
+    with fits.open(master_bias_file) as bias_hdul:
+        bias_data_list = [bias_hdul[ext].data.astype(float) for ext in range(1, n_ext+1)]
+
+    if use_dark and master_dark_path:
+        with fits.open(master_dark_path) as dark_hdul:
+            dark_data_list = [dark_hdul[ext].data.astype(float) for ext in range(1, n_ext+1)]
+    else:
+        dark_data_list = [None]*n_ext
 
     master_hdul = fits.HDUList([fits.PrimaryHDU()])
 
-    for ext in range(1, n_ext + 1):
+    for ext in range(1, n_ext+1):
         stack = []
+        ref_header = None
+        bias_data = bias_data_list[ext-1]
+        dark_data = dark_data_list[ext-1]
 
         for fname in flat_files:
-            with fits.open(fname) as flat_hdul, fits.open(master_bias_path) as bias_hdul:
-                if ext >= len(flat_hdul) or flat_hdul[ext].data is None:
-                    print(f"⚠️ Ext {ext} ausente en {fname}. Saltando.")
+            with fits.open(fname) as hdul:
+                if ext >= len(hdul) or hdul[ext].data is None:
                     continue
-                if ext >= len(bias_hdul) or bias_hdul[ext].data is None:
-                    print(f"⚠️ Ext {ext} ausente en bias. Saltando.")
-                    continue
+                data = hdul[ext].data.astype(float)
 
-                corrected = flat_hdul[ext].data.astype(float) - bias_hdul[ext].data.astype(float)
+                if is_roi:
+                    x0, x1, y0, y1 = active_rois[ext-1]
+                    y1 = min(y1, data.shape[0])
+                    x1 = min(x1, data.shape[1])
+                    data = data[y0:y1, x0:x1]
 
-                if use_dark:
-                    with fits.open(master_dark_path) as dark_hdul:
-                        if ext >= len(dark_hdul) or dark_hdul[ext].data is None:
-                            print(f"⚠️ Ext {ext} ausente en dark. Saltando.")
-                            continue
-                        dark_data = dark_hdul[ext].data.astype(float)
-                        if corrected.shape != dark_data.shape:
-                            print(
-                                f"⚠️ Dimensiones incompatibles en ext {ext}: flat {corrected.shape}, dark {dark_data.shape}. Saltando.")
-                            continue
-                        corrected = corrected - dark_data
+                # Corregir con bias y dark
+                data -= bias_data
+                if use_dark and dark_data is not None:
+                    data -= dark_data
 
-                stack.append(corrected)
+                stack.append(data)
+                if ref_header is None:
+                    ref_header = hdul[ext].header.copy()
 
         if not stack:
-            print(f"❌ No se pudo crear master flat para ext {ext} (stack vacío).")
+            print(f"❌ No se pudo crear master flat para ext {ext}")
             continue
 
         stack = np.array(stack)
-
         if sigma_clip_enabled:
-            clipped = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters)
-            stack = clipped.data
+            stack = sigma_clip(stack, sigma=sigma, axis=0, maxiters=maxiters).data
             print(f"✂️ Sigma clip aplicado en ext {ext} con σ={sigma}")
 
-        if combine_type == 'median':
-            combined = np.median(stack, axis=0)
-        elif combine_type == 'mean':
-            combined = np.mean(stack, axis=0)
-        else:
-            raise ValueError("Tipo de combinación inválido. Usa 'mean' o 'median'.")
+        combined = np.median(stack, axis=0) if combine_type=='median' else np.mean(stack, axis=0)
+        # Normalizar por la mediana
+        combined /= np.median(combined)
 
-        norm = np.median(combined)
-        normalized_flat = combined / norm if norm > 0 else combined
-
-        with fits.open(flat_files[0]) as ref_hdul:
-            header = ref_hdul[ext].header.copy()
-
-        header['HISTORY'] = f"Master flat normalizado de {len(stack)} archivos"
-        header['EXTNAME'] = f'FLAT{ext}'
+        if ref_header is None:
+            ref_header = fits.Header()
+        ref_header['EXTNAME'] = f'FLAT{ext}'
+        ref_header['HISTORY'] = f"Master flat de {len(stack)} archivos"
+        if is_roi:
+            ref_header['HISTORY'] = f", trimmed to ROI [{x0}:{x1},{y0}:{y1}]"
         if use_dark:
-            header['HISTORY'] = f"Master flat corregido por dark"
+            ref_header['HISTORY'] = ", dark subtracted"
+        ref_header['NAXIS2'], ref_header['NAXIS1'] = combined.shape
+        ref_header['SKIPROW'] = skiprow
+        ref_header['ROI'] = is_roi
 
-        master_hdul.append(fits.ImageHDU(data=normalized_flat, header=header))
-        print(f"✅ Master flat normalizado generado para ext {ext}")
+        master_hdul.append(fits.ImageHDU(data=combined, header=ref_header))
+        print(f"✅ Master flat creado para ext {ext}")
 
     master_hdul.writeto(output_file, overwrite=True)
     print(f"💾 Master flat guardado: {output_file}")

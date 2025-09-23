@@ -102,7 +102,7 @@ def main():
     parser.add_argument("--make-master-dark", action="store_true", help="Crear master dark.")
     parser.add_argument("--do-bias-subtraction", action="store_true", help="Aplicar master bias a ciencia.")
     parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
-                        help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
+                        help="ROI de overscan: col_start col_end row_start row_end (1st ext). Def: 575 600 10 1000")
     parser.add_argument("--method", choices=["mean", "poly"], default="mean", help="Método de corrección overscan.")
     parser.add_argument("--do-dark-subtraction", action="store_true", help="Aplicar master dark a ciencia.")
     parser.add_argument("--make-master-flat", action="store_true", help="Crear master flat.")
@@ -120,6 +120,8 @@ def main():
                         help="Extensiones a excluir en la combinación de imágenes de ciencia (e.g., --remove-ext 14 15 16).")
     parser.add_argument("--do-wcs", action="store_true", help="Añadir coordenadas WCS usando astropy.wcs.")
     parser.add_argument("--view-weighted-rois", action="store_true", help="Ver rango de ROIS en promedio ponderado.")
+    parser.add_argument("--sig-box-base", type=int, nargs=4, default=[375, 410, 470, 510],
+                        help="ROI de señal para optimizar el ponderado: col_start col_end row_start row_end (1st ext). Def [375, 410, 470, 510]")
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
@@ -198,10 +200,19 @@ def main():
                 overscan_bias_files = []
                 print(f"📥 Procesando {len(consistent_bias_files)} archivos bias con NSAMP consistente...")
                 for f in consistent_bias_files:
+                    with fits.open(f) as hdul:
+                        print(f"🔍 Archivo overscan: {f}, número de HDUs: {len(hdul)}")
+                        for ext in range(1, len(hdul)):
+                            data = hdul[ext].data
+                            if data is None:
+                                print(f"❌ Ext {ext} vacío en {f}")
+                            else:
+                                print(f"✅ Ext {ext} shape={data.shape} en {f}")
+
                     out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, out_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, out_file, roi_vector, method=args.method, sci_file=None)
                     overscan_bias_files.append(out_file)
-                create_master_bias(overscan_bias_files, mbias_path)
+                create_master_bias(overscan_bias_files, mbias_path, sci_file=None)
                 print(f"✅ Master bias creado: {mbias_path}")
 
     # 2. Master dark
@@ -240,11 +251,11 @@ def main():
                 for f in consistent_dark_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
                     bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
                     overscan_dark_files.append(overscan_file)
                     bias_corrected_dark_files.append(bias_corrected_file)
-                create_master_dark(bias_corrected_dark_files, mdark_path)
+                create_master_dark(bias_corrected_dark_files, mdark_path, sci_file=None)
                 print(f"✅ Master dark creado: {mdark_path}")
 
     # 3. Sustracción de bias y dark en ciencia
@@ -274,7 +285,7 @@ def main():
             bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
             dark_corrected_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
 
-            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
             if do_bias_subtraction:
                 bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
             if do_dark_subtraction:
@@ -309,12 +320,21 @@ def main():
             for filter_key, group_files in flat_groups.items():
                 overscan_group_files = []
                 for f in group_files:
+                    with fits.open(f) as hdul:
+                        print(f"🔍 Archivo flat overscan: {f}, número de HDUs: {len(hdul)}")
+                        for ext in range(1, len(hdul)):
+                            data = hdul[ext].data
+                            if data is None:
+                                print(f"❌ Ext {ext} vacío en {f}")
+                            else:
+                                print(f"✅ Ext {ext} shape={data.shape} en {f}")
+
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
                     overscan_group_files.append(overscan_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
                 create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
-                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path)
+                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path, sci_file=None)
                 print(f"✅ Master flat creado para filtro {filter_key}: {mflat_path}")
 
     # 5. Verificación de master flats por filtro
@@ -350,7 +370,7 @@ def main():
             prefix = ""
             overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
             if not os.path.exists(overscan_file):
-                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
             prefix = "o"
             if do_bias_subtraction:
                 bias_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
@@ -431,7 +451,7 @@ def main():
                 for f in sci_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     if not os.path.exists(overscan_file):
-                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=None)
                 corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
                 input_pattern = "o_*.fits"
         if corrected_files:
@@ -464,7 +484,7 @@ def main():
                     weights = None
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
-                            weights = optimize_weights_from_raw(original_file, exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
+                            weights = optimize_weights_from_raw(original_file, sig_box_base= args.sig_box_base, exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
                             print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
                             print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
