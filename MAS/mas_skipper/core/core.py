@@ -284,7 +284,7 @@ def combine_science_images(corrected_files, output_file, exclude_extensions=None
     hdu.writeto(output_file, overwrite=True)
     print(f"\n✅ Imagen combinada guardada: {output_file}")
 
-def optimize_weights_from_raw(raw_file, exclude_extensions=[], visualize_rois=True):
+def optimize_weights_from_raw(raw_file, sig_box_base=None, exclude_extensions=[], visualize_rois=True):
     """
     Calcula pesos optimizados por SNR para las 16 extensiones de un FITS raw.
     Las ROIs se definen en el formato esperado por roi_shifting: col1, col2, row1, row2.
@@ -300,7 +300,10 @@ def optimize_weights_from_raw(raw_file, exclude_extensions=[], visualize_rois=Tr
         ncols = int(hdul[1].header.get('NAXIS1', 895))
 
         # ROIs en orden natural (1→16)
-        sig_box_base = [375, 410, 470, 510]
+        # ROIs en orden natural (1 -> 16)
+        if sig_box_base is None:
+            sig_box_base = [375, 410, 470, 510]  # modify
+
         ov_box_base = [575, 600, 10, nrows - 10] #[315, 355, 350, 390]
 
         sig_boxes, _ = roi_shifting(sig_box_base, return_extensions_order=True)
