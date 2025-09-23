@@ -467,13 +467,14 @@ def estimate_readnoise(input_files, roi_vector=None, file=None, gain_vector=None
         list: Lista de valores de readnoise (en electrones) para cada extensión.
     """
     readnoise_vector = []
+    readnoise_vector_ADU = []
     n_extensions = 16  # Asumimos 16 canales para MAS-Skipper CCD
     if isinstance(input_files, str):
         input_files = [input_files]  # Convertir a lista si es un solo archivo
     if isinstance(gain_vector, (int, float)):
         gain_vector = [gain_vector] * n_extensions
     elif gain_vector is None:
-        gain_vector = [50] * n_extensions  # Valor por defecto para 'other+other'
+        gain_vector = [50] * n_extensions  # Valor por defecto para 'other'
 
     for ext in range(1, n_extensions + 1):
         variances = []
@@ -518,12 +519,13 @@ def estimate_readnoise(input_files, roi_vector=None, file=None, gain_vector=None
             gain = gain_vector[ext - 1] if ext - 1 < len(gain_vector) else gain_vector[0]
             readnoise_e = readnoise_adu / gain if gain != 0 else 3.84
             readnoise_vector.append(readnoise_e)
+            readnoise_vector_ADU.append(readnoise_adu)
         else:
             print(f"⚠️ No se pudo calcular readnoise para ext {ext}. Usando 3.84.")
             readnoise_vector.append(3.84)
 
     print(f"📊 Readout-noise calculado por extensión (en e-): {readnoise_vector}")
-    return readnoise_vector
+    return readnoise_vector_ADU
 
 def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, objlim=5.0,
                           gain_vector=None, satlevel_vector=None, roi_vector=None, file=None,
@@ -656,5 +658,4 @@ def add_wcs(input_file, output_file):
             hdu_list.append(hdu)
 
         hdu_list.writeto(output_file, overwrite=True)
-    print(f"✅ WCS añadido: {output_file}")
     print(f"✅ WCS añadido: {output_file}")
