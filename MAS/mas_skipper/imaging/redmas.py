@@ -19,7 +19,7 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
         output_file (str): Ruta al archivo FITS de salida.
         roi_vector (list): Lista de ROIs de overscan por extensión (x_start, x_end, y_start, y_end).
         sci_file (str, optional): Imagen científica para alinear el ROI.
-        method (str): Método de corrección ('mean' o 'poly').
+        method (str): Metodo de corrección ('mean' o 'poly').
     """
     # Obtener información de ROI y tamaño según imagen científica si se provee
     skiprow, nrows, ncols, is_roi = get_roi_info(input_file if sci_file is None else sci_file, sci_file=sci_file)
