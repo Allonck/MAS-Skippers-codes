@@ -3,6 +3,7 @@
 import argparse
 import os
 import glob
+import numpy as np
 from astropy.io import fits
 from ..core.core import roi_shifting, combine_science_images, optimize_weights_from_raw
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
@@ -14,16 +15,46 @@ CAMERA_CONFIGS = {
         'satlevel': [2860000] * 16  # Ejemplo: nivel de saturación en ADU. Asumir 55ke-.
     },
     'v5+hh3': {
-        'gain': 50.0,  # [1.2, 1.2, 1.1, 1.1],
-        'satlevel': 1400000  # [65000, 65000, 65000, 65000] #Asumir 28 ke-.
+        'gain': [54.087,52.931,53.657,52.776,52.263,53.038,53.107,53.148,53.232,53.245,53.451,53.586,52.984,53.085,53.153,52.904],
+        'satlevel': [np.float64(1612739.5),
+ np.float64(1576804.8),
+ np.float64(1506055.2),
+ np.float64(1504030.4),
+ np.float64(1572481.1),
+ np.float64(1542810.5),
+ np.float64(1558958.5),
+ np.float64(1534329.5),
+ np.float64(1588106.2),
+ np.float64(1598597.1),
+ np.float64(1587693.2),
+ np.float64(1635811.5),
+ np.float64(1591685.8),
+ np.float64(1595470.5),
+ np.float64(1629425.4),
+ np.float64(1569200.5)]  # [65000, 65000, 65000, 65000] #Asumir 28 ke-.
     },
     'seq+hh2d7': {
         'gain': 48.0,  # Valor único si son similares
         'satlevel': 2640000  # Asumir 55 ke-.
     },
     'seq+hh3': {
-        'gain': 50.0,
-        'satlevel': 1400000  # Asumir 28 ke-.
+        'gain': [54.087,52.931,53.657,52.776,52.263,53.038,53.107,53.148,53.232,53.245,53.451,53.586,52.984,53.085,53.153,52.904],
+        'satlevel': [np.float64(1612739.5),
+ np.float64(1576804.8),
+ np.float64(1506055.2),
+ np.float64(1504030.4),
+ np.float64(1572481.1),
+ np.float64(1542810.5),
+ np.float64(1558958.5),
+ np.float64(1534329.5),
+ np.float64(1588106.2),
+ np.float64(1598597.1),
+ np.float64(1587693.2),
+ np.float64(1635811.5),
+ np.float64(1591685.8),
+ np.float64(1595470.5),
+ np.float64(1629425.4),
+ np.float64(1569200.5)]  # Asumir 28 ke-.
     },
     'v5+ulensing': {
         'gain': 52.0,
