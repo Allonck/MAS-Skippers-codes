@@ -387,11 +387,19 @@ def main():
             if do_cosmic_ray_correction:
                 cosmic_file = os.path.join(args.output, f"c{prefix}_{os.path.basename(f)}")
                 if not os.path.exists(cosmic_file):
-                    inv_gain_vector = [1 / g for g in gain_vector]
+                    # Asegurar que gain_vector sea iterable
+                    if isinstance(gain_vector, (int, float)):
+                        inv_gain_vector = [1.0 / gain_vector]
+                    else:
+                        inv_gain_vector = [1.0 / g for g in gain_vector]
+
                     cosmic_ray_correction(
                         flat_file,
-                        cosmic_file, sigclip=5.0, sigfrac=0.2, objlim=6.0,
-                        readnoise_vector=read_noise, gain_vector= inv_gain_vector, satlevel_vector=satlevel_vector
+                        cosmic_file,
+                        sigclip=5.0, sigfrac=0.2, objlim=6.0,
+                        readnoise_vector=read_noise,
+                        gain_vector=inv_gain_vector,
+                        satlevel_vector=satlevel_vector
                     )
                 prefix = f"c{prefix}"
 
