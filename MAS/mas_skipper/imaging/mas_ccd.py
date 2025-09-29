@@ -133,11 +133,14 @@ def main():
     parser.add_argument("--make-master-dark", action="store_true", help="Crear master dark.")
     parser.add_argument("--do-bias-subtraction", action="store_true", help="Aplicar master bias a ciencia.")
     parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
-                        help="ROI de overscan: col_start col_end row_start row_end (1st ext). Def: 575 600 10 1000")
-    parser.add_argument("--method", choices=["mean", "poly"], default="mean", help="Método de corrección overscan.")
+                        help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
+    parser.add_argument("--method", choices=["mean", "poly"], default="mean", help="Método de corrección overscan. Def. 'mean'")
     parser.add_argument("--do-dark-subtraction", action="store_true", help="Aplicar master dark a ciencia.")
     parser.add_argument("--make-master-flat", action="store_true", help="Crear master flat.")
     parser.add_argument("--do-flat-fielding", action="store_true", help="Aplicar flat fielding.")
+    parser.add_argument("--norm-method", choices=["median", "chebyshev", "legendre"], default="median", help="Método de normalización de flats. Def. 'median'.")
+    parser.add_argument("--norm-deg", type=str, default="5,5",
+                        help="Grados (x,y) para el polinomio 2D de normalización de flats. Formato 'x,y'. Def. '5,5'.")
     parser.add_argument("--do-cosmic-ray-correction", action="store_true",
                         help="Aplicar corrección de rayos cósmicos con LACosmic.")
     parser.add_argument("--master-bias-name", default="master_bias.fits", help="Nombre del archivo master bias.")
@@ -365,7 +368,7 @@ def main():
                     overscan_group_files.append(overscan_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
                 create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
-                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path)
+                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path, norm_type=args.norm_method, norm_deg=args.norm_deg)
                 print(f"✅ Master flat creado para filtro {filter_key}: {mflat_path}")
 
     # 5. Verificación de master flats por filtro
@@ -523,7 +526,7 @@ def main():
                     weights = None
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
-                            weights = optimize_weights_from_raw(original_file, sig_box_base= args.sig_box_base, exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
+                            weights = optimize_weights_from_raw(original_file, sig_box_base=args.sig_box_base,exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
                             print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
                             print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")

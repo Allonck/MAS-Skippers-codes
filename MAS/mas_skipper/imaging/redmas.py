@@ -7,6 +7,38 @@ from astropy.wcs import WCS
 from astroscrappy import detect_cosmics
 from ..core.core import roi_shifting, get_roi_info
 
+from numpy.polynomial import chebyshev, legendre
+
+
+def fit_poly2d(data, deg=(5, 5), poly_type='chebyshev'):
+    """
+    Ajusta un polinomio 2D (Chebyshev o Legendre) a la imagen y devuelve el modelo ajustado.
+
+    Args:
+        data (2D np.array): Imagen a ajustar.
+        deg (tuple): Grados del polinomio (deg_x, deg_y).
+        poly_type (str): 'chebyshev' o 'legendre'.
+
+    Returns:
+        model (2D np.array): Modelo polinomial evaluado en la imagen.
+    """
+    deg = (int(deg[0]), int(deg[2]))
+
+    ny, nx = data.shape
+    y, x = np.mgrid[0:ny, 0:nx]
+
+    # Normalizamos coordenadas a [-1,1] para polinomios
+    x_norm = 2 * (x / (nx - 1)) - 1
+    y_norm = 2 * (y / (ny - 1)) - 1
+
+    # Forma de matriz de diseño 2D simple
+    X = np.vstack([x_norm.ravel() ** i * y_norm.ravel() ** j
+                   for i in range(deg[0] + 1) for j in range(deg[1] + 1)]).T
+
+    coeffs, _, _, _ = np.linalg.lstsq(X, data.ravel(), rcond=None)
+    model = np.dot(X, coeffs).reshape(ny, nx)
+    return model
+
 def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=None, method='mean'):
     """
     Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta al ROI activo.
@@ -164,6 +196,7 @@ def create_master_bias(bias_files, output_file, combine_type='median', sigma_cli
     master_hdul.writeto(output_file, overwrite=True)
     print(f"💾 Master bias guardado: {output_file}")
 
+
 def bias_subtraction(input_file, master_bias, output_file):
     """
     Resta el master bias de un archivo FITS.
@@ -188,6 +221,7 @@ def bias_subtraction(input_file, master_bias, output_file):
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Bias restado: {output_file}")
+
 
 def create_master_dark(dark_files, output_file, combine_type='median',
                        sigma_clip_enabled=True, sigma=3.0, maxiters=5):
@@ -262,6 +296,7 @@ def create_master_dark(dark_files, output_file, combine_type='median',
 
     master_hdul.writeto(output_file, overwrite=True)
     print(f"💾 Master dark guardado: {output_file}")
+
 
 def dark_subtraction(input_file, master_dark, output_file):
     """
@@ -357,15 +392,18 @@ def dark_subtraction(input_file, master_dark, output_file):
 #     master_hdul.writeto(output_file, overwrite=True)
 #     print(f"💾 Master flat guardado: {output_file}")
 
-def create_master_flat_normalized(flat_files, master_bias_path, output_file, combine_type='median',
-                                  sigma_clip_enabled=True, sigma=3.0, maxiters=5, use_dark=False,
-                                  master_dark_path=None):
+def create_master_flat_normalized(flat_files, master_bias_path, output_file,
+                                  combine_type='median', sigma_clip_enabled=True,
+                                  sigma=3.0, maxiters=5, use_dark=False,
+                                  master_dark_path=None, norm_type='median',
+                                  norm_deg=(5,5)):
     """
     Crea un master flat normalizado a partir de archivos flat corregidos por bias y opcionalmente por dark.
+    Se puede normalizar usando mediana o polinomios 2D (Chebyshev o Legendre).
 
     Args:
         flat_files (list): Lista de archivos flat.
-        master_bias_path (str): Ruta al master bias (usado para corregir flats).
+        master_bias_path (str): Ruta al master bias.
         output_file (str): Ruta para guardar el master flat normalizado.
         combine_type (str): Metodo de combinación: 'median' o 'mean'.
         sigma_clip_enabled (bool): Si aplicar sigma clipping antes de combinar.
@@ -373,6 +411,8 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file, com
         maxiters (int): Iteraciones máximas para sigma clipping.
         use_dark (bool): Si restar el master dark a los flats.
         master_dark_path (str): Ruta al master dark (requerido si use_dark=True).
+        norm_type (str): 'median', 'chebyshev' o 'legendre'.
+        norm_deg (tuple): Grados (x, y) para el polinomio 2D si se usa 'chebyshev' o 'legendre'.
 
     Returns:
         None
@@ -411,8 +451,7 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file, com
                             continue
                         dark_data = dark_hdul[ext].data.astype(float)
                         if corrected.shape != dark_data.shape:
-                            print(
-                                f"⚠️ Dimensiones incompatibles en ext {ext}: flat {corrected.shape}, dark {dark_data.shape}. Saltando.")
+                            print(f"⚠️ Dimensiones incompatibles en ext {ext}: flat {corrected.shape}, dark {dark_data.shape}. Saltando.")
                             continue
                         corrected = corrected - dark_data
 
@@ -429,6 +468,7 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file, com
             stack = clipped.data
             print(f"✂️ Sigma clip aplicado en ext {ext} con σ={sigma}")
 
+        # Combinar
         if combine_type == 'median':
             combined = np.median(stack, axis=0)
         elif combine_type == 'mean':
@@ -436,16 +476,23 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file, com
         else:
             raise ValueError("Tipo de combinación inválido. Usa 'mean' o 'median'.")
 
-        norm = np.median(combined)
-        normalized_flat = combined / norm if norm > 0 else combined
+        # Normalización
+        if norm_type.lower() == 'median':
+            median_val = np.median(combined)
+            normalized_flat = combined / median_val if median_val != 0 else combined
+        elif norm_type.lower() in ['chebyshev', 'legendre']:
+            normalized_flat = combined / fit_poly2d(combined, deg=norm_deg, poly_type=norm_type.lower())
+            print(f"📐 Normalización 2D usando {norm_type} grado {norm_deg} en ext {ext}")
+        else:
+            raise ValueError("norm_type inválido. Usa 'median', 'chebyshev' o 'legendre'.")
 
+        # Header
         with fits.open(flat_files[0]) as ref_hdul:
             header = ref_hdul[ext].header.copy()
-
         header['HISTORY'] = f"Master flat normalizado de {len(stack)} archivos"
         header['EXTNAME'] = f'FLAT{ext}'
         if use_dark:
-            header['HISTORY'] = f"Master flat corregido por dark"
+            header['HISTORY'] += ", corregido por dark"
 
         master_hdul.append(fits.ImageHDU(data=normalized_flat, header=header))
         print(f"✅ Master flat normalizado generado para ext {ext}")
