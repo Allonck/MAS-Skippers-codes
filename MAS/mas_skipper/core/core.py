@@ -299,11 +299,9 @@ def optimize_weights_from_raw(raw_file, sig_box_base=None, exclude_extensions=[]
         nrows = int(hdul[1].header.get('NAXIS2', 1100))
         ncols = int(hdul[1].header.get('NAXIS1', 895))
 
-        # ROIs en orden natural (1→16)
         # ROIs en orden natural (1 -> 16)
         if sig_box_base is None:
-            sig_box_base = [375, 410, 470, 510]  # modify
-
+            sig_box_base = [375, 410, 470, 510] #modify
         ov_box_base = [575, 600, 10, nrows - 10] #[315, 355, 350, 390]
 
         sig_boxes, _ = roi_shifting(sig_box_base, return_extensions_order=True)
