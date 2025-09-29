@@ -138,7 +138,7 @@ def main():
     parser.add_argument("--do-dark-subtraction", action="store_true", help="Aplicar master dark a ciencia.")
     parser.add_argument("--make-master-flat", action="store_true", help="Crear master flat.")
     parser.add_argument("--do-flat-fielding", action="store_true", help="Aplicar flat fielding.")
-    parser.add_argument("--norm-method", choices=["median", "chebyshev", "legendre"], default="median", help="Método de normalización de flats. Def. 'chebyshev'.")
+    parser.add_argument("--norm-method", choices=["median", "chebyshev", "legendre"], default="chebyshev", help="Método de normalización de flats. Def. 'chebyshev'.")
     parser.add_argument("--norm-deg", type=str, default="5,5",
                         help="Grados (x,y) para el polinomio 2D de normalización de flats. Formato 'x,y'. Def. '5,5'.")
     parser.add_argument("--do-cosmic-ray-correction", action="store_true",
