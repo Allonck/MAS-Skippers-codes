@@ -34,9 +34,6 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
 
     with fits.open(input_file, mode='readonly') as hdul:
         n_ext = len(hdul) - 1
-        if n_ext != 16:
-            print(f"⚠️ El archivo {input_file} tiene {n_ext} extensiones, se esperaban 16.")
-
         master_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul[0].header.copy())])
 
         for ext in range(1, n_ext + 1):
@@ -49,6 +46,10 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
             x_start, x_end, y_start, y_end = roi
             active_roi = active_rois[ext - 1]
 
+            # --- Detectar si input está guardado como ROI ---
+            nrows_input = data.shape[0]
+            is_roi_input = nrows_input < 1024  # asumiendo detector de 1024 filas
+
             # Calcular overscan
             overscan_region = data[y_start:y_end, x_start:x_end]
             if method == 'mean':
@@ -60,15 +61,21 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
             else:
                 raise ValueError("Método de overscan inválido. Usa 'mean' o 'poly'.")
 
-            # Corregir y recortar
+            # Corregir overscan
             corrected_data = data - overscan_value
 
-            # Evitar recortes fuera de rango
+            # --- Aplicar SKIPROW solo si input es full-frame y la ciencia es ROI ---
             y0, y1, x0, x1 = active_roi[2], active_roi[3], active_roi[0], active_roi[1]
-            y1 = min(y1, corrected_data.shape[0])
-            x1 = min(x1, corrected_data.shape[1])
-            trimmed_data = corrected_data[y0:y1, x0:x1]
+            if not is_roi_input and is_roi:
+                # input full-frame → cortar con SKIPROW para alinear
+                y0 = max(0, y0 + skiprow)
+                y1 = min(corrected_data.shape[0], y1 + skiprow)
+                trimmed_data = corrected_data[y0:y1, x0:x1]
+            else:
+                # input ya ROI o ciencia full-frame → corte directo
+                trimmed_data = corrected_data[y0:y1, x0:x1]
 
+            # Guardar HDU corregida
             header = hdul[ext].header.copy()
             header['HISTORY'] = f'Overscan corregido con metodo {method}'
             header['NAXIS2'] = trimmed_data.shape[0]
@@ -78,11 +85,11 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
             header['EXTNAME'] = f'EXT{ext}'
 
             master_hdul.append(fits.ImageHDU(data=trimmed_data, header=header))
-            print(f"✅ Ext {ext}: Overscan = {overscan_value[0] if method=='poly' else overscan_value:.3f}, "
+            print(f"✅ Ext {ext}: Input ROI={is_roi_input}, Ciencia ROI={is_roi}, "
                   f"Recortado a {trimmed_data.shape}")
-
-        master_hdul.writeto(output_file, overwrite=True)
-        print(f"💾 Overscan corregido y recortado guardado: {output_file}")
+    # 💾 Guardar al final
+    master_hdul.writeto(output_file, overwrite=True)
+    print(f"💾 Overscan corregido y recortado guardado: {output_file}")
 
 def create_master_bias(bias_files, output_file, combine_type='median', sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """

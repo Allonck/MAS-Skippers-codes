@@ -36,7 +36,7 @@ def get_roi_info(file_path, sci_file=None):
             # Buscar la primera extensión válida
             for hdu in hdul[1:]:
                 if hdu.data is not None:
-                    skiprow = int(hdu.header.get('SKIPROW', 0))
+                    skiprow = int(hdu.header.get('SKIPROW', 690))
                     nrows = int(hdu.header.get('NAXIS2', NAXIS2_MAX))
                     ncols = int(hdu.header.get('NAXIS1', NAXIS1_MAX))
                     is_roi = skiprow > 0 or nrows < NAXIS2_MAX or hdu.header.get('ROI', False) or hdu.header.get('WINDOW', False)
