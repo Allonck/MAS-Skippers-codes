@@ -7,5 +7,6 @@ from .redmas import (
     create_master_flat_normalized,
     flat_fielding,
     estimate_readnoise,
-    cosmic_ray_correction
+    cosmic_ray_correction,
+    decorrelate_noise
 )

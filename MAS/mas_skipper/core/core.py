@@ -164,7 +164,6 @@ def combine_science_images(corrected_files, output_file, exclude_extensions=None
     Args:
         corrected_files (list): Lista de archivos FITS corregidos.
         output_file (str): Ruta para el archivo FITS combinado.
-        roi_base (list): Ignorado (mantenido por compatibilidad). Por defecto None.
         exclude_extensions (list): Lista de extensiones (1-16) a excluir del promedio.
         comb_mode (str): Modo de combinación: 'simple' o 'weighted'.
         weights (list, optional): Pesos para las extensiones (longitud 16).

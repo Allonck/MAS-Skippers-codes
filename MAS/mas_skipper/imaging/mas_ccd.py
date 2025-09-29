@@ -7,7 +7,7 @@ import numpy as np
 from astropy.io import fits
 from ..core.core import roi_shifting, combine_science_images, optimize_weights_from_raw
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
-    dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise, add_wcs
+    dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise, add_wcs, decorrelate_noise
 
 CAMERA_CONFIGS = {
     'v5+hh2d7': {
@@ -117,6 +117,61 @@ def detect_camera_config(file_path):
         else:
             return 'other'
 
+
+def decorrelate_raw_images(raw_files, output_dir, roi_overscan=None, gain_vector=None):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    decorr_files = []
+    for raw_file in raw_files:
+        print(f"\n📂 Decorrelacionando archivo raw: {raw_file}")
+        with fits.open(raw_file) as hdul:
+            nrows = int(hdul[1].header.get('NAXIS2', 1200))
+            ncols = int(hdul[1].header.get('NAXIS1', 900))
+            primary_hdr = hdul[0].header.copy()
+            roi_vector = roi_shifting(roi_overscan) if roi_overscan else roi_shifting([575, 600, 50, 150])
+            print(f"ℹ️ Usando roi_vector: {roi_vector}")
+            valid_data = []
+            valid_exts = []
+            for ext in range(1, 17):
+                if ext >= len(hdul):
+                    print(f"❌ Ext {ext} no existe en {raw_file} (len={len(hdul)})")
+                    continue
+                if hdul[ext].data is None:
+                    print(f"❌ Ext {ext} está vacía en {raw_file}")
+                    continue
+                image_data = hdul[ext].data.astype(float)
+                if image_data.shape == (nrows, ncols):
+                    pass
+                elif image_data.shape == (ncols, nrows):
+                    print(f"⚠️ Datos transpuestos detectados en ext {ext} de {raw_file}. Transponiendo.")
+                    image_data = image_data.T
+                else:
+                    print(f"⚠️ Dimensiones incorrectas en ext {ext} de {raw_file}. "
+                          f"Esperado=({nrows},{ncols}), obtenido={image_data.shape}")
+                    continue
+                valid_data.append(image_data)
+                valid_exts.append(ext)
+            if not valid_data:
+                print(f"⚠️ No hay extensiones válidas en {raw_file}. Copiando archivo sin decorrelación.")
+                output_file = os.path.join(output_dir, f"x_{os.path.basename(raw_file)}")
+                hdul.writeto(output_file, overwrite=True)
+                decorr_files.append(output_file)
+                continue
+            # Configuración de PCA
+            groups = [([1, 2, 3, 4], 1), ([5, 6, 7, 8], 1), ([9, 10, 11, 12], 1), ([13, 14, 16], 1)]
+            decorrelated, _ = decorrelate_noise(valid_data, valid_exts, roi_vector=roi_vector,
+                                                groups=groups, gain_vector=gain_vector)
+            output_file = os.path.join(output_dir, f"x_{os.path.basename(raw_file)}")
+            hdu_list = fits.HDUList([fits.PrimaryHDU(header=primary_hdr)])
+            for i, img in enumerate(decorrelated):
+                hdu = fits.ImageHDU(data=img, header=hdul[valid_exts[i]].header)
+                hdu.header['HISTORY'] = f'Decorrelated with PCA (groups={groups})'
+                hdu_list.append(hdu)
+            hdu_list.writeto(output_file, overwrite=True)
+            print(f"✅ Imagen decorrelacionada guardada: {output_file}")
+            decorr_files.append(output_file)
+    return decorr_files
+
 def main():
     parser = argparse.ArgumentParser(description="MASSKIP v0.4.3.1 - No warranty of results.")
 
@@ -132,7 +187,7 @@ def main():
     parser.add_argument("--make-master-bias", action="store_true", help="Crear master bias.")
     parser.add_argument("--make-master-dark", action="store_true", help="Crear master dark.")
     parser.add_argument("--do-bias-subtraction", action="store_true", help="Aplicar master bias a ciencia.")
-    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
+    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 190],
                         help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
     parser.add_argument("--method", choices=["mean", "poly"], default="mean", help="Método de corrección overscan. Def. 'mean'")
     parser.add_argument("--do-dark-subtraction", action="store_true", help="Aplicar master dark a ciencia.")
@@ -170,6 +225,12 @@ def main():
     do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
     do_wcs = args.do_wcs or args.full_reduction
 
+    # Encontrar archivos
+    sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern))) if args.raw and args.sci_pattern else []
+    bias_files = sorted(glob.glob(os.path.join(args.raw, args.bias_pattern))) if args.raw and args.bias_pattern else []
+    dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern))) if args.raw and args.dark_pattern else []
+    flat_files = sorted(glob.glob(os.path.join(args.raw, args.flat_pattern))) if args.raw and args.flat_pattern else []
+
     # Generar vector de ROIs para overscan
     roi_vector = roi_shifting(args.roi_overscan)
 
@@ -191,7 +252,7 @@ def main():
     satlevel_vector = config.get('satlevel', [1400000] * 16)
 
     # Obtener NSAMP (HDU[1]) y EXPTIME (HDU[0]) de referencia desde el primer archivo científico
-    sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
+    #sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
     reference_nsamp = None
     reference_exptime = None
     if sci_files:
@@ -202,56 +263,68 @@ def main():
         print(f"📋 EXPTIME de referencia (ciencia, HDU[0]): {reference_exptime}")
 
     # Calcular readnoise una vez al inicio
-    sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
+    #sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
     read_noise = None
     if sci_files and (args.do_cosmic_ray_correction or args.full_reduction or args.reduction or do_bias_subtraction):
         print(f"📊 Calculando readout noise usando archivos {sci_files}...")
         roi_vector = roi_shifting(args.roi_overscan)
         read_noise = estimate_readnoise(sci_files, roi_vector=roi_vector)
 
-    # 1. Master bias
+    # 0: Decorrelación
+    if sci_files:
+        sci_files = decorrelate_raw_images(sci_files, args.output, roi_overscan=args.roi_overscan, gain_vector=None)
+    if bias_files:
+        bias_files = decorrelate_raw_images(bias_files, args.output, roi_overscan=args.roi_overscan, gain_vector=None)
+    if dark_files:
+        dark_files = decorrelate_raw_images(dark_files, args.output, roi_overscan=args.roi_overscan, gain_vector=None)
+    if flat_files:
+        flat_files = decorrelate_raw_images(flat_files, args.output, roi_overscan=args.roi_overscan, gain_vector=None)
+
+    # 1: Master bias
     mbias_path = os.path.join(args.output, args.master_bias_name)
+    make_master_bias = args.do_bias_subtraction or args.full_reduction or args.reduction
     if make_master_bias:
-        bias_files = sorted(glob.glob(os.path.join(args.raw, args.bias_pattern)))
         if not bias_files:
-            print("⚠️ No se encontraron archivos bias con el patrón especificado. Saltando creación de master bias.")
+            print("⚠️ No se encontraron archivos bias decorrelacionados. Saltando creación de master bias.")
             make_master_bias = False
-            do_bias_subtraction = False
+            args.do_bias_subtraction = False
         else:
             consistent_bias_files = []
             for f in bias_files:
                 with fits.open(f) as hdul:
                     bias_nsamp = hdul[1].header.get('NSAMP', None) if len(hdul) > 1 else None
                     if reference_nsamp is not None and bias_nsamp != reference_nsamp:
-                        print(f"⚠️ Archivo bias {f} tiene NSAMP={bias_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
+                        print(
+                            f"⚠️ Archivo bias {f} tiene NSAMP={bias_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
                         continue
                     consistent_bias_files.append(f)
             if not consistent_bias_files:
                 print("⚠️ No se encontraron archivos bias con NSAMP consistente. Saltando creación de master bias.")
                 make_master_bias = False
-                do_bias_subtraction = False
+                args.do_bias_subtraction = False
             else:
                 overscan_bias_files = []
-                print(f"📥 Procesando {len(consistent_bias_files)} archivos bias con NSAMP consistente...")
+                print(
+                    f"📥 Procesando {len(consistent_bias_files)} archivos bias decorrelacionados con NSAMP consistente...")
                 for f in consistent_bias_files:
-                    out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    out_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
                     overscan_correction_combined(f, out_file, roi_vector, method=args.method)
                     overscan_bias_files.append(out_file)
                 create_master_bias(overscan_bias_files, mbias_path)
                 print(f"✅ Master bias creado: {mbias_path}")
 
-    # 2. Master dark
+    # 2: Master dark
     mdark_path = os.path.join(args.output, args.master_dark_name)
+    make_master_dark = args.do_dark_subtraction or args.full_reduction
     if make_master_dark:
-        dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
         if not dark_files:
-            print("⚠️ No se encontraron archivos dark con el patrón especificado. Saltando creación de master dark.")
+            print("⚠️ No se encontraron archivos dark decorrelacionados. Saltando creación de master dark.")
             make_master_dark = False
-            do_dark_subtraction = False
+            args.do_dark_subtraction = False
         elif not os.path.exists(mbias_path):
             print("⚠️ Master bias no encontrado. Necesario para corregir darks. Saltando creación de master dark.")
             make_master_dark = False
-            do_dark_subtraction = False
+            args.do_dark_subtraction = False
         else:
             consistent_dark_files = []
             for f in dark_files:
@@ -259,23 +332,27 @@ def main():
                     dark_nsamp = hdul[1].header.get('NSAMP', None) if len(hdul) > 1 else None
                     dark_exptime = hdul[0].header.get('EXPTIME', None)
                     if reference_nsamp is not None and dark_nsamp != reference_nsamp:
-                        print(f"⚠️ Archivo dark {f} tiene NSAMP={dark_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
+                        print(
+                            f"⚠️ Archivo dark {f} tiene NSAMP={dark_nsamp} (HDU[1]), no coincide con NSAMP={reference_nsamp}. Omitiendo.")
                         continue
                     if reference_exptime is not None and dark_exptime != reference_exptime:
-                        print(f"⚠️ Archivo dark {f} tiene EXPTIME={dark_exptime} (HDU[0]), no coincide con EXPTIME={reference_exptime}. Omitiendo.")
+                        print(
+                            f"⚠️ Archivo dark {f} tiene EXPTIME={dark_exptime} (HDU[0]), no coincide con EXPTIME={reference_exptime}. Omitiendo.")
                         continue
                     consistent_dark_files.append(f)
             if not consistent_dark_files:
-                print("⚠️ No se encontraron archivos dark con NSAMP y EXPTIME consistentes. Saltando creación de master dark.")
+                print(
+                    "⚠️ No se encontraron archivos dark con NSAMP y EXPTIME consistentes. Saltando creación de master dark.")
                 make_master_dark = False
-                do_dark_subtraction = False
+                args.do_dark_subtraction = False
             else:
                 overscan_dark_files = []
                 bias_corrected_dark_files = []
-                print(f"📥 Procesando {len(consistent_dark_files)} archivos dark con NSAMP y EXPTIME consistentes...")
+                print(
+                    f"📥 Procesando {len(consistent_dark_files)} archivos dark decorrelacionados con NSAMP y EXPTIME consistentes...")
                 for f in consistent_dark_files:
-                    overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
+                    overscan_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
+                    bias_corrected_file = os.path.join(args.output, f"box_{os.path.basename(f).replace('x_', '')}")
                     overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
                     bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
                     overscan_dark_files.append(overscan_file)
@@ -283,33 +360,25 @@ def main():
                 create_master_dark(bias_corrected_dark_files, mdark_path)
                 print(f"✅ Master dark creado: {mdark_path}")
 
-    # 3. Sustracción de bias y dark en ciencia
+    # 3: Sustracción de bias y dark en ciencia
+    do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
+    do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
     if do_bias_subtraction or do_dark_subtraction:
-        sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
-        mbias_path = os.path.join(args.output, args.master_bias_name)
-        mdark_path = os.path.join(args.output, args.master_dark_name)
-
         if not sci_files:
-            print("⚠️ No se encontraron archivos de ciencia con el patrón especificado.")
+            print("⚠️ No se encontraron archivos de ciencia decorrelacionados. Saltando sustracción.")
             return
         if do_bias_subtraction and not os.path.exists(mbias_path):
-            print("⚠️ Master bias no encontrado. Necesario para sustracción de bias.")
-            return
+            print("⚠️ Master bias no encontrado. Saltando sustracción de bias.")
+            do_bias_subtraction = False
         if do_dark_subtraction and not os.path.exists(mdark_path):
-            print("⚠️ Master dark no encontrado. Necesario para sustracción de dark.")
-            return
-
-        dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
-        if not dark_files:
+            print("⚠️ Master dark no encontrado. Saltando sustracción de dark.")
             do_dark_subtraction = False
-            print("⚠️ No se encontraron archivos dark. Saltando sustracción de dark.")
 
-        print(f"🔬 Procesando ciencia: {len(sci_files)} archivos")
+        print(f"🔬 Procesando ciencia: {len(sci_files)} archivos decorrelacionados...")
         for f in sci_files:
-            overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-            bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-            dark_corrected_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
-
+            overscan_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
+            bias_corrected_file = os.path.join(args.output, f"box_{os.path.basename(f).replace('x_', '')}")
+            dark_corrected_file = os.path.join(args.output, f"dbox_{os.path.basename(f).replace('x_', '')}")
             overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
             if do_bias_subtraction:
                 bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
@@ -317,23 +386,24 @@ def main():
                 input_file = bias_corrected_file if do_bias_subtraction else overscan_file
                 dark_subtraction(input_file, mdark_path, dark_corrected_file)
 
-    # 4. Master flat por filtro
+    # 4: Master flat por filtro
+    make_master_flat = args.do_flat_fielding or args.full_reduction
     if make_master_flat:
-        flat_files = sorted(glob.glob(os.path.join(args.raw, args.flat_pattern)))
         if not flat_files:
-            print("⚠️ No se encontraron archivos flat con el patrón especificado. Saltando creación de master flat.")
+            print("⚠️ No se encontraron archivos flat decorrelacionados. Saltando creación de master flat.")
             make_master_flat = False
-            do_flat_fielding = False
+            args.do_flat_fielding = False
         elif not os.path.exists(mbias_path):
             print("⚠️ Master bias no encontrado. Necesario para corregir flats. Saltando creación de master flat.")
             make_master_flat = False
-            do_flat_fielding = False
-        elif do_dark_subtraction and not os.path.exists(mdark_path):
-            print("⚠️ Master dark no encontrado. Necesario para corregir flats con dark. Saltando creación de master flat.")
+            args.do_flat_fielding = False
+        elif args.do_dark_subtraction and not os.path.exists(mdark_path):
+            print(
+                "⚠️ Master dark no encontrado. Necesario para corregir flats con dark. Saltando creación de master flat.")
             make_master_flat = False
-            do_flat_fielding = False
+            args.do_flat_fielding = False
         else:
-            print(f"📥 Procesando {len(flat_files)} archivos flat...")
+            print(f"📥 Procesando {len(flat_files)} archivos flat decorrelacionados...")
             flat_groups = {}
             for f in flat_files:
                 with fits.open(f) as hdul:
@@ -344,24 +414,29 @@ def main():
                     flat_groups[filter_key].append(f)
             for filter_key, group_files in flat_groups.items():
                 overscan_group_files = []
+                bias_corrected_group_files = []
                 for f in group_files:
-                    overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    overscan_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
+                    bias_corrected_file = os.path.join(args.output, f"box_{os.path.basename(f).replace('x_', '')}")
                     overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
                     overscan_group_files.append(overscan_file)
+                    bias_corrected_group_files.append(bias_corrected_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
-                create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
-                                             use_dark=do_dark_subtraction, master_dark_path=mdark_path, norm_type=args.norm_method, norm_deg=args.norm_deg)
+                create_master_flat_normalized(bias_corrected_group_files, mbias_path, mflat_path,
+                                              use_dark=args.do_dark_subtraction and os.path.exists(mdark_path),
+                                              master_dark_path=mdark_path, norm_type=args.norm_method,
+                                              norm_deg=args.norm_deg)
                 print(f"✅ Master flat creado para filtro {filter_key}: {mflat_path}")
 
-    # 5. Verificación de master flats por filtro
+    # 5: Verificación de master flats por filtro
+    do_flat_fielding = args.do_flat_fielding or args.full_reduction
     if do_flat_fielding:
-        sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
         if not sci_files:
-            print("⚠️ No se encontraron archivos de ciencia con el patrón especificado.")
+            print("⚠️ No se encontraron archivos de ciencia decorrelacionados. Saltando verificación de master flats.")
             return
-        dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
-        use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
-        print(f"🌈 Verificando master flats para {len(sci_files)} archivos de ciencia...")
+        use_dark = args.do_dark_subtraction and dark_files and os.path.exists(mdark_path)
+        print(f"🌈 Verificando master flats para {len(sci_files)} archivos de ciencia decorrelacionados...")
         for f in sci_files:
             with fits.open(f) as hdul:
                 filters = hdul[0].header.get('FILTERS', 'unknown').strip()
@@ -372,32 +447,33 @@ def main():
                 do_flat_fielding = False
                 break
 
-    # 6. Procesamiento de imágenes de ciencia
+    # 6: Procesamiento de imágenes de ciencia
     do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
     do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
-    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
+    do_flat_fielding = args.do_flat_fielding or args.full_reduction
     do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
-    do_wcs = args.do_wcs or args.full_reduction or args.reduction
+    do_wcs = args.do_wcs or args.full_reduction
     use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
     if sci_files:
-        print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia...")
+        print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia decorrelacionadas...")
         for i, f in enumerate(sci_files, 1):
             print(f"[{i}/{len(sci_files)}] {f}")
-            prefix = ""
-            overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+            prefix = "x"
+            overscan_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
             if not os.path.exists(overscan_file):
                 overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
-            prefix = "o"
-            if do_bias_subtraction:
-                bias_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
+            prefix = "ox"
+            if do_bias_subtraction and os.path.exists(mbias_path):
+                bias_file = os.path.join(args.output, f"box_{os.path.basename(f).replace('x_', '')}")
                 if not os.path.exists(bias_file):
                     bias_subtraction(overscan_file, mbias_path, bias_file)
-                prefix = "bo"
+                prefix = "box"
             if use_dark:
-                dark_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
+                dark_file = os.path.join(args.output, f"dbox_{os.path.basename(f).replace('x_', '')}")
                 if not os.path.exists(dark_file):
-                    dark_subtraction(bias_file if do_bias_subtraction else overscan_file, mdark_path, dark_file)
-                prefix = "dbo"
+                    dark_subtraction(bias_file if do_bias_subtraction and os.path.exists(mbias_path) else overscan_file,
+                                     mdark_path, dark_file)
+                prefix = "dbox"
             if do_flat_fielding:
                 with fits.open(f) as hdul:
                     filters = hdul[0].header.get('FILTERS', 'unknown').strip()
@@ -406,24 +482,23 @@ def main():
                 if not os.path.exists(mflat_path):
                     print(f"⚠️ Master flat para filtro {filter_key} no encontrado. Saltando flat-fielding para {f}.")
                     continue
-                flat_file = os.path.join(args.output, f"f{prefix}_{os.path.basename(f)}")
+                flat_file = os.path.join(args.output, f"fbox_{os.path.basename(f).replace('x_', '')}")
                 if not os.path.exists(flat_file):
                     flat_fielding(
-                        dark_file if use_dark else (bias_file if do_bias_subtraction else overscan_file),
+                        dark_file if use_dark else (
+                            bias_file if do_bias_subtraction and os.path.exists(mbias_path) else overscan_file),
                         mflat_path, flat_file
                     )
-                prefix = f"f{prefix}"
+                prefix = "fbox"
                 if do_wcs:
                     add_wcs(flat_file, flat_file)
             if do_cosmic_ray_correction:
-                cosmic_file = os.path.join(args.output, f"c{prefix}_{os.path.basename(f)}")
+                cosmic_file = os.path.join(args.output, f"cfbox_{os.path.basename(f).replace('x_', '')}")
                 if not os.path.exists(cosmic_file):
-                    # Asegurar que gain_vector sea iterable
                     if isinstance(gain_vector, (int, float)):
                         inv_gain_vector = [1.0 / gain_vector]
                     else:
                         inv_gain_vector = [1.0 / g for g in gain_vector]
-
                     cosmic_ray_correction(
                         flat_file,
                         cosmic_file,
@@ -432,38 +507,33 @@ def main():
                         gain_vector=inv_gain_vector,
                         satlevel_vector=satlevel_vector
                     )
-                prefix = f"c{prefix}"
+                prefix = "cfbox"
 
-    # 7. Combinar imágenes de ciencia
+    # 7: Combinar imágenes de ciencia
     if sci_files:
-        dark_files = sorted(glob.glob(os.path.join(args.raw, args.dark_pattern)))
-        use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
+        use_dark = args.do_dark_subtraction and dark_files and os.path.exists(mdark_path)
         prefix = ""
         if do_cosmic_ray_correction:
-            prefix = "c"
-        if do_flat_fielding:
-            prefix += "f"
-        if use_dark:
-            prefix += "dbo"
-        elif do_bias_subtraction:
-            prefix += "bo"
+            prefix = "cfbox"
+        elif do_flat_fielding:
+            prefix = "fbox"
+        elif use_dark:
+            prefix = "dbox"
+        elif do_bias_subtraction and os.path.exists(mbias_path):
+            prefix = "box"
         else:
-            prefix += "o"
+            prefix = "ox"
         input_pattern = f"{prefix}_*.fits"
         corrected_files = sorted(glob.glob(os.path.join(args.output, input_pattern)))
         if not corrected_files:
             print(
                 f"⚠️ No se encontraron archivos corregidos con el patrón {input_pattern}. Intentando con archivos menos procesados.")
             alternative_patterns = [
-                f"c{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits" if do_cosmic_ray_correction else None,
-                f"{'f' if do_flat_fielding else ''}{'dbo' if use_dark else 'bo'}_*.fits",
-                f"{'f' if do_flat_fielding else ''}o_*.fits" if do_flat_fielding else None,
-                "cdbo_*.fits" if do_cosmic_ray_correction and use_dark else None,
-                "dbo_*.fits" if use_dark else None,
-                "cbo_*.fits" if do_cosmic_ray_correction and do_bias_subtraction else None,
-                "bo_*.fits" if do_bias_subtraction else None,
-                "co_*.fits" if do_cosmic_ray_correction else None,
-                "o_*.fits"
+                f"cfbox_*.fits" if do_cosmic_ray_correction else None,
+                f"fbox_*.fits" if do_flat_fielding else None,
+                f"dbox_*.fits" if use_dark else None,
+                f"box_*.fits" if do_bias_subtraction and os.path.exists(mbias_path) else None,
+                f"ox_*.fits"
             ]
             for pattern in [p for p in alternative_patterns if p]:
                 corrected_files = sorted(glob.glob(os.path.join(args.output, pattern)))
@@ -473,23 +543,22 @@ def main():
             if not corrected_files:
                 print("⚠️ No se encontraron archivos corregidos para combinar. Generando archivos overscan.")
                 for f in sci_files:
-                    overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
+                    overscan_file = os.path.join(args.output, f"ox_{os.path.basename(f).replace('x_', '')}")
                     if not os.path.exists(overscan_file):
                         overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
-                corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
-                input_pattern = "o_*.fits"
+                corrected_files = sorted(glob.glob(os.path.join(args.output, "ox_*.fits")))
+                input_pattern = "ox_*.fits"
         if corrected_files:
             print(
-                f"🔗 Combinando los 16 canales de {len(corrected_files)} imágenes científicas con patrón {input_pattern}...")
+                f"🔗 Combinando los 16 canales de {len(corrected_files)} imágenes científicas decorrelacionadas con patrón {input_pattern}...")
             combined_count = 0
             processed_files = set()
             _, extorder = roi_shifting([0, 0, 0, 0], return_extensions_order=True)
-
             for corrected_file in corrected_files:
-                # Encontrar el archivo científico original a partir del nombre del archivo corregido
+                if corrected_file in processed_files:
+                    continue
                 base_name = os.path.basename(corrected_file).replace(f"{prefix}_", "")
-                original_file = os.path.join(args.raw, base_name)
-                # Extraer filtro, tiempo de exposición y NSAMP del archivo original
+                original_file = os.path.join(args.output, f"x_{base_name}")
                 filter_key = "unknown"
                 exptime = "unknown"
                 nsamp = "unknown"
@@ -500,18 +569,20 @@ def main():
                         exptime = int(hdul[0].header.get('EXPTIME', 0))
                         nsamp = hdul[1].header.get('NSAMP', 'unknown') if len(hdul) > 1 else 'unknown'
                 else:
-                    print(f"⚠️ Archivo original {original_file} no encontrado. Usando filtro 'unknown', EXPTIME 'unknown' y NSAMP 'unknown'.")
-                # Construir el nombre del archivo combinado
-                combined_output = os.path.join(args.output, f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s_{nsamp}.fits")
-                if corrected_file not in processed_files and not os.path.exists(combined_output):
-                    # Calcular pesos para modo weighted desde la imagen raw
+                    print(
+                        f"⚠️ Archivo decorrelacionado {original_file} no encontrado. Usando filtro 'unknown', EXPTIME 'unknown' y NSAMP 'unknown'.")
+                combined_output = os.path.join(args.output,
+                                               f"{args.combined_prefix}{prefix}_{base_name.split('.fits')[0]}_{filter_key}_{exptime}s_{nsamp}.fits")
+                if not os.path.exists(combined_output):
                     weights = None
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
-                            weights = optimize_weights_from_raw(original_file, sig_box_base=args.sig_box_base,exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
+                            weights = optimize_weights_from_raw(original_file, sig_box_base=args.sig_box_base,
+                                                                exclude_extensions=args.remove_ext,
+                                                                visualize_rois=args.view_weighted_rois)
                             print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
-                            print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
+                            print(f"❌ Imagen decorrelacionada {original_file} no encontrada. Usando pesos uniformes.")
                             weights = [1.0 / (16 - len(args.remove_ext))] * 16
                             for ext in args.remove_ext:
                                 weights[extorder.index(ext)] = 0.0
@@ -525,7 +596,8 @@ def main():
                     combined_count += 1
                     processed_files.add(corrected_file)
                     print(f"✅ Imagen combinada guardada: {combined_output}")
-                print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
+            print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from astropy import units as u
 from astropy.io import fits
@@ -9,6 +10,7 @@ from ..core.core import roi_shifting
 
 from numpy.polynomial import chebyshev, legendre
 
+from sklearn.decomposition import PCA
 
 def fit_poly2d(data, deg=(5, 5), poly_type='chebyshev'):
     """
@@ -703,3 +705,133 @@ def add_wcs(input_file, output_file):
 
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ WCS añadido: {output_file}")
+
+
+def decorrelate_noise(data, valid_exts, roi_vector=None, gain_vector=None, groups=4, n_components_reduction=1):
+    """
+    Decorrelación de ruido usando PCA en grupos de canales secuenciales con n_components_reduction ajustado por grupo.
+
+    Args:
+        data (list or np.array): Datos de imagen CCD (n_channels, nrows, ncols) o lista de arrays.
+        valid_exts (list): Lista de extensiones válidas para mapear a grupos.
+        roi_vector (list, optional): Lista de ROIs [x1, x2, y1, y2] por extensión.
+        gain_vector (list, optional): Lista de ganancias (e-/ADU) por extensión.
+        groups (int, optional): Ignorado, mantenido por compatibilidad.
+        n_components_reduction (int, optional): Ignorado, se define por grupo.
+
+    Returns:
+        np.array: Datos decorrelacionados con la misma forma que la entrada.
+        np.array: Datos originales para comparación.
+    """
+    if isinstance(data, list):
+        data = np.array(data)
+    n_channels, nrows, ncols = data.shape
+    decorrelated = np.zeros_like(data)
+
+    if roi_vector is None:
+        roi_vector = roi_shifting([575, 600, 50, 150])
+
+    # Medir ruido antes de PCA
+    temp_file = "temp_decorr.fits"
+    hdu_list = fits.HDUList([fits.PrimaryHDU()])
+    for i, img in enumerate(data):
+        hdu_list.append(fits.ImageHDU(data=img))
+    hdu_list.writeto(temp_file, overwrite=True)
+    noise_before = estimate_readnoise(temp_file, roi_vector=roi_vector, gain_vector=gain_vector)
+    os.remove(temp_file)
+
+    # Calcular MAD antes
+    mad_before = []
+    for i, img in enumerate(data):
+        x1_o, x2_o, y1_o, y2_o = roi_vector[i]
+        if x1_o < x2_o <= ncols and y1_o < y2_o <= nrows:
+            mad = np.median(np.abs(img[y1_o:y2_o, x1_o:x2_o] - np.median(img[y1_o:y2_o, x1_o:x2_o]))) * 1.4826
+        else:
+            mad = np.nan
+        mad_before.append(mad)
+
+    valid_noise_indices = [i for i, std in enumerate(noise_before) if std < 1000 or np.isnan(std)]
+    valid_noise_before = [noise_before[i] for i in valid_noise_indices]
+    valid_mad_before = [mad_before[i] for i in valid_noise_indices]
+    print(f"ℹ️ Ruido antes de PCA (excluyendo anómalas): std={np.nanmean(valid_noise_before):.3f} ± {np.nanstd(valid_noise_before):.3f}, MAD={np.nanmean(valid_mad_before):.3f} ± {np.nanstd(valid_mad_before):.3f}")
+
+    valid_indices = [i for i, std in enumerate(noise_before) if std < 1000 or np.isnan(std)]
+    if len(valid_indices) < len(noise_before):
+        print(f"⚠️ Extensiones con ruido anómalo excluidas: {[valid_exts[i] for i in range(len(noise_before)) if i not in valid_indices]}")
+    if not valid_indices:
+        print("⚠️ Todas las extensiones tienen ruido anómalo. Copiando datos sin decorrelación.")
+        return data, data
+
+    # Calcular matriz de covarianza completa
+    all_data = data[valid_indices].reshape(len(valid_indices), -1)
+    all_data_normalized = (all_data - np.mean(all_data, axis=1, keepdims=True)) / np.std(all_data, axis=1, keepdims=True)
+    all_data_normalized = np.where(np.isnan(all_data_normalized), 0, all_data_normalized)
+    cov_matrix_all = np.cov(all_data_normalized)
+    print(f"ℹ️ Matriz de covarianza normalizada para todas las extensiones válidas {valid_exts}:")
+    print(cov_matrix_all)
+
+    # Agrupación secuencial con n_components_reduction por grupo
+    groups = [
+        ([1, 2, 3, 4], 1),  # n=3 para [1,2,3,4]
+        ([5, 6, 7, 8], 1),  # n=1 para [5,6,7,8]
+        ([9, 10, 11, 12], 1),  # n=1 para [9,10,11,12]
+        ([13, 14, 16], 1)  # n=1 para [13,14,16]
+    ]
+    group_indices = []
+    for group, n_comp in groups:
+        idx_group = [valid_exts.index(ext) for ext in group if ext in valid_exts and valid_exts.index(ext) in valid_indices]
+        if len(idx_group) >= 2:
+            group_indices.append((idx_group, n_comp))
+        elif idx_group:
+            print(f"⚠️ Grupo {group} tiene solo {len(idx_group)} canal(es) válido(s): {[valid_exts[j] for j in idx_group]}. No se aplica PCA.")
+
+    # Aplicar PCA por grupo
+    for idx_group, n_comp in group_indices:
+        group_data = data[idx_group].reshape(len(idx_group), -1)
+        group_mean = np.mean(group_data, axis=1, keepdims=True)
+        group_std = np.std(group_data, axis=1, keepdims=True)
+        group_std = np.where(group_std == 0, 1, group_std)
+        group_data_normalized = (group_data - group_mean) / group_std
+        group_data_normalized = np.where(np.isnan(group_data_normalized), 0, group_data_normalized)
+        cov_matrix = np.cov(group_data_normalized)
+        print(f"ℹ️ Matriz de covarianza normalizada para grupo {[valid_exts[j] for j in idx_group]}:")
+        print(cov_matrix)
+
+        n_components = max(1, len(idx_group) - n_comp)
+        pca = PCA(n_components=n_components)
+        pca.fit(group_data_normalized)
+        transformed = pca.transform(group_data_normalized)
+        decorrelated_group = pca.inverse_transform(transformed) * group_std + group_mean
+        decorrelated[idx_group] = decorrelated_group.reshape(len(idx_group), nrows, ncols)
+        print(f"ℹ️ Varianza explicada por PCA para grupo {[valid_exts[j] for j in idx_group]}: {pca.explained_variance_ratio_}")
+
+    # Copiar extensiones no procesadas
+    for i in range(n_channels):
+        if i not in [j for group, _ in group_indices for j in group]:
+            decorrelated[i] = data[i]
+            print(f"ℹ️ Extensión {valid_exts[i]} no agrupada, copiando sin PCA.")
+
+    # Medir ruido después de PCA
+    temp_file = "temp_decorr_after.fits"
+    hdu_list = fits.HDUList([fits.PrimaryHDU()])
+    for i, img in enumerate(decorrelated):
+        hdu_list.append(fits.ImageHDU(data=img))
+    hdu_list.writeto(temp_file, overwrite=True)
+    noise_after = estimate_readnoise(temp_file, roi_vector=roi_vector, gain_vector=gain_vector)
+    os.remove(temp_file)
+
+    # Calcular MAD después
+    mad_after = []
+    for i, img in enumerate(decorrelated):
+        x1_o, x2_o, y1_o, y2_o = roi_vector[i]
+        if x1_o < x2_o <= ncols and y1_o < y2_o <= nrows:
+            mad = np.median(np.abs(img[y1_o:y2_o, x1_o:x2_o] - np.median(img[y1_o:y2_o, x1_o:x2_o]))) * 1.4826
+        else:
+            mad = np.nan
+        mad_after.append(mad)
+
+    valid_noise_after = [noise_after[i] for i in valid_noise_indices]
+    valid_mad_after = [mad_after[i] for i in valid_noise_indices]
+    print(f"ℹ️ Ruido después de PCA (excluyendo anómalas): std={np.nanmean(valid_noise_after):.3f} ± {np.nanstd(valid_noise_after):.3f}, MAD={np.nanmean(valid_mad_after):.3f} ± {np.nanstd(valid_mad_after):.3f}")
+
+    return decorrelated, data
