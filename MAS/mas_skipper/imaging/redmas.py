@@ -114,6 +114,7 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
             header['NAXIS1'] = trimmed_data.shape[1]
             header['SKIPROW'] = skiprow
             header['ROI'] = is_roi
+            header['DATASEC'] = f"[{x0}:{x1},{y0}:{y1}]"  # ahora basado en el corte real aplicado
             header['EXTNAME'] = f'EXT{ext}'
 
             master_hdul.append(fits.ImageHDU(data=trimmed_data, header=header))
