@@ -394,7 +394,7 @@ def dark_subtraction(input_file, master_dark, output_file):
 #     print(f"💾 Master flat guardado: {output_file}")
 
 def create_master_flat_normalized(flat_files, master_bias_path, output_file,
-                                  combine_type='median', sigma_clip_enabled=True,
+                                  combine_type='chebyshev', sigma_clip_enabled=True,
                                   sigma=3.0, maxiters=5, use_dark=False,
                                   master_dark_path=None, norm_type='median',
                                   norm_deg=(5,5)):
