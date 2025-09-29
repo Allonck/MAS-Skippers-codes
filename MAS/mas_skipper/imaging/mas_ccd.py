@@ -118,7 +118,7 @@ def detect_camera_config(file_path):
             return 'other'
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v0.4.3.1 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v1.0.0 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
@@ -234,8 +234,17 @@ def main():
                 overscan_bias_files = []
                 print(f"📥 Procesando {len(consistent_bias_files)} archivos bias con NSAMP consistente...")
                 for f in consistent_bias_files:
+                    with fits.open(f) as hdul:
+                        print(f"🔍 Archivo overscan: {f}, número de HDUs: {len(hdul)}")
+                        for ext in range(1, len(hdul)):
+                            data = hdul[ext].data
+                            if data is None:
+                                print(f"❌ Ext {ext} vacío en {f}")
+                            else:
+                                print(f"✅ Ext {ext} shape={data.shape} en {f}")
+
                     out_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, out_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, out_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     overscan_bias_files.append(out_file)
                 create_master_bias(overscan_bias_files, mbias_path)
                 print(f"✅ Master bias creado: {mbias_path}")
@@ -276,7 +285,7 @@ def main():
                 for f in consistent_dark_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
                     overscan_dark_files.append(overscan_file)
                     bias_corrected_dark_files.append(bias_corrected_file)
@@ -310,7 +319,7 @@ def main():
             bias_corrected_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
             dark_corrected_file = os.path.join(args.output, f"dbo_{os.path.basename(f)}")
 
-            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+            overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
             if do_bias_subtraction:
                 bias_subtraction(overscan_file, mbias_path, bias_corrected_file)
             if do_dark_subtraction:
@@ -345,8 +354,17 @@ def main():
             for filter_key, group_files in flat_groups.items():
                 overscan_group_files = []
                 for f in group_files:
+                    with fits.open(f) as hdul:
+                        print(f"🔍 Archivo flat overscan: {f}, número de HDUs: {len(hdul)}")
+                        for ext in range(1, len(hdul)):
+                            data = hdul[ext].data
+                            if data is None:
+                                print(f"❌ Ext {ext} vacío en {f}")
+                            else:
+                                print(f"✅ Ext {ext} shape={data.shape} en {f}")
+
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
-                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                    overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                     overscan_group_files.append(overscan_file)
                 mflat_path = os.path.join(args.output, f"{args.master_flat_name.split('.fits')[0]}_{filter_key}.fits")
                 create_master_flat_normalized(overscan_group_files, mbias_path, mflat_path,
@@ -386,7 +404,7 @@ def main():
             prefix = ""
             overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
             if not os.path.exists(overscan_file):
-                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
             prefix = "o"
             if do_bias_subtraction:
                 bias_file = os.path.join(args.output, f"bo_{os.path.basename(f)}")
@@ -475,7 +493,7 @@ def main():
                 for f in sci_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
                     if not os.path.exists(overscan_file):
-                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method)
+                        overscan_correction_combined(f, overscan_file, roi_vector, method=args.method, sci_file=sci_files[0])
                 corrected_files = sorted(glob.glob(os.path.join(args.output, "o_*.fits")))
                 input_pattern = "o_*.fits"
         if corrected_files:

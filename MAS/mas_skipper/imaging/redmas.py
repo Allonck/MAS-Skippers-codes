@@ -5,7 +5,7 @@ from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
 from astropy.wcs import WCS
 from astroscrappy import detect_cosmics
-from ..core.core import roi_shifting
+from ..core.core import roi_shifting, get_roi_info
 
 from numpy.polynomial import chebyshev, legendre
 
@@ -39,58 +39,90 @@ def fit_poly2d(data, deg=(5, 5), poly_type='chebyshev'):
     model = np.dot(X, coeffs).reshape(ny, nx)
     return model
 
-def overscan_correction_combined(input_file, output_file, roi_vector, method='mean'):
+def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=None, method='mean'):
     """
-    Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta el overscan.
+    Aplica corrección de overscan a todas las extensiones de un archivo FITS y recorta al ROI activo.
+
+    Si is_roi=False (por defecto), se usa el ROI estándar [28,539,0,1024].
+    Si is_roi=True, se ajusta dinámicamente según la imagen científica.
 
     Args:
         input_file (str): Ruta al archivo FITS de entrada.
-        output_file (str): Ruta al archivo FITS de salida (e.g., 'o_input.fits').
-        roi_vector (list): Lista de ROIs para cada extensión.
+        output_file (str): Ruta al archivo FITS de salida.
+        roi_vector (list): Lista de ROIs de overscan por extensión (x_start, x_end, y_start, y_end).
+        sci_file (str, optional): Imagen científica para alinear el ROI.
         method (str): Metodo de corrección ('mean' o 'poly').
-
-    Returns:
-        None. Guarda el archivo corregido y recortado.
     """
-    # ROI activo fijo para la primera extensión
-    active_roi_base = [28, 539, 0, 1024]
-    # Obtener ROIs activos para todas las extensiones
+    # Obtener información de ROI y tamaño según imagen científica si se provee
+    skiprow, nrows, ncols, is_roi = get_roi_info(input_file if sci_file is None else sci_file, sci_file=sci_file)
+
+    # Definir ROI activo según tipo de imagen
+    if is_roi:
+        active_roi_base = [28, 539, 0, nrows]
+    else:
+        active_roi_base = [28, 539, 0, 1024]
+
     active_rois = roi_shifting(active_roi_base)
 
     with fits.open(input_file, mode='readonly') as hdul:
-        hdu_list = fits.HDUList()
-        hdu_list.append(hdul[0].copy())  # Copiar header primario
-        for ext, roi in enumerate(roi_vector, start=1):
+        n_ext = len(hdul) - 1
+        master_hdul = fits.HDUList([fits.PrimaryHDU(header=hdul[0].header.copy())])
+
+        for ext in range(1, n_ext + 1):
             if ext >= len(hdul) or hdul[ext].data is None:
+                print(f"⚠️ Ext {ext} ausente en {input_file}. Saltando.")
                 continue
-            data = hdul[ext].data
-            overscan_region = data[roi[2]:roi[3], roi[0]:roi[1]]
+
+            data = hdul[ext].data.astype(float)
+            roi = roi_vector[ext - 1]
+            x_start, x_end, y_start, y_end = roi
+            active_roi = active_rois[ext - 1]
+
+            # --- Detectar si input está guardado como ROI ---
+            nrows_input = data.shape[0]
+            is_roi_input = nrows_input < 1024  # asumiendo detector de 1024 filas
+
+            # Calcular overscan
+            overscan_region = data[y_start:y_end, x_start:x_end]
             if method == 'mean':
                 overscan_value = np.mean(overscan_region)
+            elif method == 'poly':
+                coeffs = np.polyfit(np.arange(overscan_region.shape[0]),
+                                    np.mean(overscan_region, axis=1), 1)
+                overscan_value = np.polyval(coeffs, np.arange(data.shape[0]))[:, np.newaxis]
             else:
-                # Implementación con ajuste polinómico (simplificado)
-                x = np.arange(overscan_region.shape[1])
-                coeffs = np.polyfit(x, np.mean(overscan_region, axis=0), 1)
-                overscan_value = np.polyval(coeffs, x).mean()
+                raise ValueError("Método de overscan inválido. Usa 'mean' o 'poly'.")
+
+            # Corregir overscan
             corrected_data = data - overscan_value
-            print(f"✅ Ext {ext}: Overscan = {overscan_value:.3f}")
 
-            # Recortar el overscan usando el ROI activo
-            active_roi = active_rois[ext-1]
-            x_start, x_end, y_start, y_end = active_roi
-            if (y_end > corrected_data.shape[0]) or (x_end > corrected_data.shape[1]):
-                print(f"⚠️ ROI activo fuera de rango en ext {ext} de {input_file} (shape: {corrected_data.shape}, ROI: [{x_start}:{x_end}, {y_start}:{y_end}]). Saltando recorte.")
-                trimmed_data = corrected_data
+            # --- Aplicar SKIPROW solo si input es full-frame y la ciencia es ROI ---
+            y0, y1, x0, x1 = active_roi[2], active_roi[3], active_roi[0], active_roi[1]
+            if not is_roi_input and is_roi:
+                # input full-frame → cortar con SKIPROW para alinear
+                y0 = max(0, y0 + skiprow)
+                y1 = min(corrected_data.shape[0], y1 + skiprow)
+                trimmed_data = corrected_data[y0:y1, x0:x1]
             else:
-                trimmed_data = corrected_data[y_start:y_end, x_start:x_end]
+                # input ya ROI o ciencia full-frame → corte directo
+                trimmed_data = corrected_data[y0:y1, x0:x1]
 
-            hdu = fits.ImageHDU(data=trimmed_data, header=hdul[ext].header)
-            hdu.header['HISTORY'] = f'Overscan correction applied using {method} and trimmed'
-            hdu.header['DATASEC'] = f"[{active_roi_base[0] - 27}:{active_roi_base[1] - 27},{active_roi_base[2] + 1}:{active_roi_base[3]}]"
-            hdu_list.append(hdu)
-        hdu_list.writeto(output_file, overwrite=True)
-    print(f"✅ Overscan corregido y recortado: {output_file}")
+            # Guardar HDU corregida
+            header = hdul[ext].header.copy()
+            header['HISTORY'] = f'Overscan corregido con metodo {method}'
+            header['NAXIS2'] = trimmed_data.shape[0]
+            header['NAXIS1'] = trimmed_data.shape[1]
+            header['SKIPROW'] = skiprow
+            header['ROI'] = is_roi
+            header['DATASEC'] = f"[{x0}:{x1},{y0}:{y1}]"  # ahora basado en el corte real aplicado
+            header['EXTNAME'] = f'EXT{ext}'
 
+            master_hdul.append(fits.ImageHDU(data=trimmed_data, header=header))
+            print(f"✅ Ext {ext}: Input ROI={is_roi_input}, Ciencia ROI={is_roi}, "
+                  f"Recortado a {trimmed_data.shape}")
+    # 💾 Guardar al final
+    master_hdul.writeto(output_file, overwrite=True)
+    print(f"💾 Overscan corregido y recortado guardado: {output_file}")
 
 def create_master_bias(bias_files, output_file, combine_type='median', sigma_clip_enabled=True, sigma=3.0, maxiters=5):
     """
