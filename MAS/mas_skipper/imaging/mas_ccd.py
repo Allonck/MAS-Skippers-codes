@@ -3,6 +3,7 @@
 import argparse
 import os
 import glob
+import numpy as np
 from astropy.io import fits
 from ..core.core import roi_shifting, combine_science_images, optimize_weights_from_raw
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
