@@ -4,17 +4,17 @@
 
 ---
 
-## 🧰 Features (At the moment of 0.4.3.1b)
+## 🧰 Features (At the moment of 1.0.0)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
 - ✅ Normalized master flat creation.
-- ✅ Flat-fielding normalization with pixel-wise division.
+- ✅ Flat-fielding normalization with pixel-wise division and polynomial fitting.
 - ✅ Extension-preserving output compatible with `ds9 -mosaicimage iraf`.
-- ✅ Mutiple simple and SNR-weighted based combination of images using mean.
+- ✅ Multiple simple and graphical SNR-weighted based combination of images using mean.
 - ✅ Cosmic rays rejection available.
 - ✅ Add WCS.
-- ✅ Add ROI support (with some caveats like unstable master images).
+- ✅ Add full ROI support.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
