@@ -341,7 +341,7 @@ def combine_science_images(corrected_files, output_file, exclude_extensions=None
     final_image = np.mean(combined_images, axis=0)
     primary_hdu = fits.PrimaryHDU(header=primary_hdr)
     image_hdu = fits.ImageHDU(data=final_image, header=image_hdr)
-    image_hdu.header['HISTORY'] = f"Averaged {len(valid_exts)} extensions from {len(combined_images)} sci images, mode: {comb_mode}, excluded: {exclude_extensions}"
+    image_hdu.header['HISTORY'] = f"Averaged {len(valid_exts)} extensions from {len(combined_images)} sci images, mode: {comb_mode}, excluded: {exclude_extensions}. Weights: {weights}"
     hdu = fits.HDUList([primary_hdu, image_hdu])
     hdu.writeto(output_file, overwrite=True)
     print(f"\n✅ Imagen combinada guardada: {output_file}")

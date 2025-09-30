@@ -107,9 +107,11 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
                 # input ya ROI o ciencia full-frame → corte directo
                 trimmed_data = corrected_data[y0:y1, x0:x1]
 
+            print(f"Overscan value: {overscan_value}")
+            print(f"OV Region: {roi}")
             # Guardar HDU corregida
             header = hdul[ext].header.copy()
-            header['HISTORY'] = f'Overscan corregido con metodo {method}'
+            header['HISTORY'] = f'Overscan corregido con metodo {method} con valor {overscan_value} usando {roi}'
             header['NAXIS2'] = trimmed_data.shape[0]
             header['NAXIS1'] = trimmed_data.shape[1]
             header['SKIPROW'] = skiprow
@@ -290,7 +292,7 @@ def create_master_dark(dark_files, output_file, combine_type='median',
         if ref_header is None:
             ref_header = fits.Header()
         ref_header['EXTNAME'] = f'DARK{ext}'
-        ref_header['HISTORY'] = f"Master dark de {len(stack)} archivos"
+        ref_header['HISTORY'] = f"Master dark de {len(stack)} archivos usando metodo {combine_type}"
 
         master_hdul.append(fits.ImageHDU(data=combined, header=ref_header))
         print(f"✅ Master dark creado para ext {ext}")
@@ -490,7 +492,7 @@ def create_master_flat_normalized(flat_files, master_bias_path, output_file,
         # Header
         with fits.open(flat_files[0]) as ref_hdul:
             header = ref_hdul[ext].header.copy()
-        header['HISTORY'] = f"Master flat normalizado de {len(stack)} archivos"
+        header['HISTORY'] = f"Master flat normalizado de {len(stack)} archivos usando metodo {combine_type} y normalizado con {norm_type} usando grado {norm_deg}"
         header['EXTNAME'] = f'FLAT{ext}'
         if use_dark:
             header['HISTORY'] += ", corregido por dark"
@@ -639,6 +641,7 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
         if readnoise_vector is None:
             readnoise_vector = estimate_readnoise(input_file, roi_vector=roi_vector, file=file,
                                                   gain_vector=gain_vector)
+        print(f"📥 Aniquilando rayos cósmicos...")
         for ext in range(1, len(hdul)):
             data = hdul[ext].data
             if data is None:
@@ -657,8 +660,10 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
                 cleantype='medmask', fsmode='median'
             )
             hdu = fits.ImageHDU(data=clean_data, header=hdul[ext].header)
-            hdu.header[
-                'HISTORY'] = f'Cosmic ray correction applied with LACosmic (gain={gain}, readnoise={readnoise}, satlevel={satlevel})'
+            hdu.header['HISTORY'] = f'Cosmic ray correction applied with LACosmic (sigclip={sigclip}, sigfrac={sigfrac}, objlim={objlim})'
+            hdu.header['GAIN'] = gain
+            hdu.header['RDNOISE'] = readnoise
+            hdu.header['SATLEVEL'] = satlevel
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Rayos cósmicos corregidos: {output_file}")

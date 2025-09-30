@@ -445,7 +445,7 @@ def main():
                     cosmic_ray_correction(
                         flat_file,
                         cosmic_file,
-                        sigclip=5.0, sigfrac=0.2, objlim=4.0,
+                        sigclip=4.5, sigfrac=0.1, objlim=6.0,
                         readnoise_vector=readnoise_vector,
                         gain_vector=inv_gain_vector,
                         satlevel_vector=satlevel_vector
@@ -527,7 +527,7 @@ def main():
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
                             weights = optimize_weights_from_raw(original_file, sig_box_base=args.sig_box_base,exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
-                            print(f"Pesos calculados desde {original_file}: {weights}")
+                            #print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
                             print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
                             weights = [1.0 / (16 - len(args.remove_ext))] * 16
@@ -542,7 +542,7 @@ def main():
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
-                    print(f"✅ Imagen combinada guardada: {combined_output}")
+                    #print(f"✅ Imagen combinada guardada: {combined_output}")
                 print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
 
 if __name__ == "__main__":
