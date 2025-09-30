@@ -118,7 +118,7 @@ def detect_camera_config(file_path):
             return 'other'
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v1.0.0 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v1.0.1 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")

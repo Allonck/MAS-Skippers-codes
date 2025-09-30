@@ -1,10 +1,10 @@
 # MASSKIP – Multi-Amplifier Sensing Skipper CCD Pipeline
 
-**MASSKIP** is a prototype Python pipeline designed for the basic reduction of images acquired with a **16-channel MAS Skipper CCD**. It supports MEF (Multi-Extension FITS) files and follows a standard overscan + bias + flat calibration procedure, inspired by professional pipelines such as SOAR/Goodman.
+**MASSKIP** is a prototype Python pipeline designed for the basic reduction of images acquired with a **16-channel MAS Skipper CCD**. It supports MEF (Multi-Extension FITS) files and follows a standard overscan + bias + flat calibration procedure, inspired by data reduction pipelines such as SOAR/Goodman.
 
 ---
 
-## 🧰 Features (At the moment of 1.0.0)
+## 🧰 Features (At the moment of 1.0.1)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -12,7 +12,7 @@
 - ✅ Flat-fielding normalization with pixel-wise division and polynomial fitting.
 - ✅ Extension-preserving output compatible with `ds9 -mosaicimage iraf`.
 - ✅ Multiple simple and graphical SNR-weighted based combination of images using mean.
-- ✅ Cosmic rays rejection available.
+- ✅ Cosmic rays rejection available and enhanced.
 - ✅ Add WCS.
 - ✅ Add full ROI support.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
@@ -28,14 +28,17 @@ python3 -m venv .maspipeline
 source .maspipeline/bin/activate
 pip install -e .
 ```
-
+To verify the install: 
+```bash
+mas-ccd -h
+```
 ---
 
 ## ⚙️ Example Use of CLI
 
 mas-ccd \
-  --reduction \
-  --sci-pattern "sci*.fits" 
+  --full-reduction \
+  --sci-pattern "science_filename_*.fits" 
   
 This will:
 
@@ -48,6 +51,12 @@ This will:
    * Generate a normalized master flat.
 
    * Apply flat-fielding to all bias-corrected science images.
+
+   * Add WCS
+
+   * Annihilate cosmic rays.
+
+   * Combine all the extensions into a Photometry / Astrometry ready Science image.
 
 ---
 
