@@ -441,12 +441,12 @@ def main():
                         inv_gain_vector = [1.0 / gain_vector]
                     else:
                         inv_gain_vector = [1.0 / g for g in gain_vector]
-
+                    readnoise_vector = np.array(read_noise) * np.array(inv_gain_vector)
                     cosmic_ray_correction(
                         flat_file,
                         cosmic_file,
-                        sigclip=5.0, sigfrac=0.2, objlim=6.0,
-                        readnoise_vector=read_noise,
+                        sigclip=5.0, sigfrac=0.2, objlim=4.0,
+                        readnoise_vector=readnoise_vector,
                         gain_vector=inv_gain_vector,
                         satlevel_vector=satlevel_vector
                     )
