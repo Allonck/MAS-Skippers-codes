@@ -20,7 +20,7 @@
 
 ---
 
-## 📦 Installation
+## 📦 Installation with venv
 
 ```bash
 git clone https://github.com/Allonck/MAS-Skippers-codes.git
@@ -34,6 +34,14 @@ To verify the install:
 mas-ccd -h
 ```
 ---
+
+## 📦 Configure Jupyter notebook with venv
+
+```bash
+pip install jupyter ipykernel
+python -m ipykernel install --user --name=.venv --display-name "MASSKIP-env"
+```
+Then you can create an .ipynb file, go to "Kernel" -> "Change Kernel" -> "Select 'MASSKIP-env'"
 
 ## ⚙️ Example Use of CLI
 
@@ -61,6 +69,18 @@ This will:
 
 ---
 
+## General management
+To enter the venv:
+```bash
+source ~/.maspipeline/bin/activate
+```
+To exit the venv:
+```bash
+deactivate
+```
+
+---
+
 ## IMPORTANT NOTES
 
 * Assumes 16 extensions (excluding primary HDU).
@@ -69,7 +89,7 @@ This will:
 
 * Headers are preserved in all outputs to support DS9 visualization (-mosaic iraf) and only modifies the keyword DATASEC.
 
-* The pipeline is modular and intended for further extension in the near future (e.g., cosmic ray rejection, gain correction).
+* The pipeline is modular and intended for further extension in the near future (e.g. decorrelation, photometry, astrometry).
 
 ---
 ## Credits
