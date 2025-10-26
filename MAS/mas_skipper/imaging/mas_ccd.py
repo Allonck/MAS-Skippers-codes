@@ -117,8 +117,23 @@ def detect_camera_config(file_path):
         else:
             return 'other'
 
+def calculate_effective_gain(args, gain_vector, weights=None, extorder=None):
+    """
+    Calcula la ganancia efectiva (e-/ADU) ajustada por pesos o exclusiones.
+    """
+    if args.comb_mode == 'weighted' and weights is not None:
+        # Ganancia ponderada: suma(peso_i * gain_i) / suma(peso_i)
+        effective_gain = np.average(gain_vector, weights=weights)
+    else:
+        # Promedio de ganancias, excluyendo --remove-ext
+        active_exts = [i for i in range(len(gain_vector)) if (i + 1) not in args.remove_ext]
+        active_gains = [gain_vector[i] for i in active_exts]
+        effective_gain = np.mean(active_gains) if active_gains else gain_vector[0]
+
+    return effective_gain
+
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v1.0.1 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v1.0.2 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
@@ -132,7 +147,7 @@ def main():
     parser.add_argument("--make-master-bias", action="store_true", help="Crear master bias.")
     parser.add_argument("--make-master-dark", action="store_true", help="Crear master dark.")
     parser.add_argument("--do-bias-subtraction", action="store_true", help="Aplicar master bias a ciencia.")
-    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 1000],
+    parser.add_argument("--roi-overscan", type=int, nargs=4, default=[575, 600, 10, 190],
                         help="ROI de overscan: col_start col_end row_start row_end (1st ext)")
     parser.add_argument("--method", choices=["mean", "poly"], default="mean", help="Método de corrección overscan. Def. 'mean'")
     parser.add_argument("--do-dark-subtraction", action="store_true", help="Aplicar master dark a ciencia.")
@@ -156,6 +171,7 @@ def main():
     parser.add_argument("--view-weighted-rois", action="store_true", help="Ver rango de ROIS en promedio ponderado.")
     parser.add_argument("--sig-box-base", type=int, nargs=4, default=[375, 410, 470, 510],
                         help="ROI de señal para optimizar el ponderado: col_start col_end row_start row_end (1st ext). Def [375, 410, 470, 510]")
+    parser.add_argument("--do-ADU-to-e", action="store_true", help="Transformar ADUs a e-")
 
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
@@ -163,12 +179,14 @@ def main():
     # Determinar pasos a ejecutar
     make_master_bias = args.make_master_bias or args.full_reduction or args.reduction or args.do_bias_subtraction or args.make_master_dark or args.do_dark_subtraction or args.make_master_flat or args.do_flat_fielding
     make_master_dark = args.make_master_dark or args.full_reduction or args.do_dark_subtraction
-    do_bias_subtraction = args.do_bias_subtraction or args.full_reduction or args.reduction or args.do_dark_subtraction or args.do_flat_fielding
-    do_dark_subtraction = args.make_master_dark or args.do_dark_subtraction or args.full_reduction
     make_master_flat = args.make_master_flat or args.full_reduction or args.reduction or args.do_flat_fielding
+
+    do_bias_subtraction = args.do_bias_subtraction or args.full_reduction or args.reduction or args.do_dark_subtraction or args.do_flat_fielding #redefined
+    do_dark_subtraction = args.make_master_dark or args.do_dark_subtraction or args.full_reduction #redefined
     do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
     do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
-    do_wcs = args.do_wcs or args.full_reduction
+    do_wcs = args.do_wcs or args.full_reduction or args.reduction
+    do_ADU_to_e = args.do_ADU_to_e
 
     # Generar vector de ROIs para overscan
     roi_vector = roi_shifting(args.roi_overscan)
@@ -394,8 +412,6 @@ def main():
     do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
     do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
     do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
-    do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
-    do_wcs = args.do_wcs or args.full_reduction or args.reduction
     use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
     if sci_files:
         print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia...")
@@ -542,7 +558,30 @@ def main():
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
-                    #print(f"✅ Imagen combinada guardada: {combined_output}")
+                    if args.do_ADU_to_e:
+                        # Calcular ganancia efectiva
+                        effective_gain = calculate_effective_gain(args, gain_vector, weights=weights, extorder=extorder)
+                        print(f"ℹ️ Ganancia efectiva: {effective_gain:.3f} e-/ADU")
+
+                        # Leer imagen combinada en memoria
+                        with fits.open(combined_output) as hdul:
+                            combined_hdr = hdul[0].header.copy()  # Header primary (HDU 0)
+                            combined_hdr_ext1 = hdul[1].header.copy()  # Copiar header de HDU 1
+                            combined_data = hdul[1].data / effective_gain  # Escalar solo datos de HDU 1
+
+                        # Construir HDUList nuevo (estilo overscan_correction_combined)
+                        e_hdul = fits.HDUList([fits.PrimaryHDU(header=combined_hdr)])
+                        e_hdul.append(fits.ImageHDU(data=combined_data,
+                                                    header=combined_hdr_ext1))  # HDU 1 con header original copiado
+
+                        # Agregar info solo al primary HDU (HDU 0)
+                        e_hdul[0].header['GAIN_EFF'] = effective_gain
+                        e_hdul[0].header['HISTORY'] = f'Converted to e- with effective gain {effective_gain:.3f}'
+
+                        # Guardar imagen en e-
+                        e_output = combined_output.replace('.fits', '_e.fits')
+                        e_hdul.writeto(e_output, overwrite=True)
+                        print(f"✅ Imagen combinada en e- guardada: {e_output} con ganancia efectiva: {effective_gain:.3f}")
                 print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
 
 if __name__ == "__main__":
