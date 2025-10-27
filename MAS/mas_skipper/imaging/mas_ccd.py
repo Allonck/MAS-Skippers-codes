@@ -11,8 +11,8 @@ from .redmas import overscan_correction_combined, create_master_bias, bias_subtr
 
 CAMERA_CONFIGS = {
     'v5+hh2d7': {
-        'gain': [52.0] * 16,  # Ejemplo: 4 extensiones, ganancia en e-/ADU
-        'satlevel': [2860000] * 16  # Ejemplo: nivel de saturación en ADU. Asumir 55ke-.
+        'gain': [49.89,48.90,48.71,49.02, 48.88,48.82,48.89,49.03, 48.60,48.74,49.03,48.80 ,49.97,49.79,49.29,49.84],  # Ganancias en ADU/e-
+        'satlevel': [2702563] * 16  # Ejemplo: nivel de saturación en ADU. Asumir 55ke- del promedio.
     },
     'v5+hh3': {
         'gain': [54.087,52.931,53.657,52.776,52.263,53.038,53.107,53.148,53.232,53.245,53.451,53.586,52.984,53.085,53.153,52.904],
@@ -34,7 +34,7 @@ CAMERA_CONFIGS = {
  np.float64(1569200.5)]  # [65000, 65000, 65000, 65000] #Asumir 28 ke-.
     },
     'seq+hh2d7': {
-        'gain': 48.0,  # Valor único si son similares
+        'gain': 48.0,  # Valor único
         'satlevel': 2640000  # Asumir 55 ke-.
     },
     'seq+hh3': {
@@ -57,7 +57,7 @@ CAMERA_CONFIGS = {
  np.float64(1569200.5)]  # Asumir 28 ke-.
     },
     'v5+ulensing': {
-        'gain': 52.0,
+        'gain': [52.0] * 16,
         'satlevel': 260000  # Asumir 5ke-.
     },
     'other': {
