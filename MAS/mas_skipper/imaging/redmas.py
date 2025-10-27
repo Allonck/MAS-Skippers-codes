@@ -115,7 +115,7 @@ def overscan_correction_combined(input_file, output_file, roi_vector, sci_file=N
             header['NAXIS2'] = trimmed_data.shape[0]
             header['NAXIS1'] = trimmed_data.shape[1]
             header['SKIPROW'] = skiprow
-            header['ROI'] = is_roi
+            header['ROI'] = (is_roi, "ROI trimmed image")
             header['DATASEC'] = f"[{x0}:{x1},{y0}:{y1}]"  # ahora basado en el corte real aplicado
             header['EXTNAME'] = f'EXT{ext}'
 
@@ -661,9 +661,9 @@ def cosmic_ray_correction(input_file, output_file, sigclip=4.5, sigfrac=0.3, obj
             )
             hdu = fits.ImageHDU(data=clean_data, header=hdul[ext].header)
             hdu.header['HISTORY'] = f'Cosmic ray correction applied with LACosmic (sigclip={sigclip}, sigfrac={sigfrac}, objlim={objlim})'
-            hdu.header['GAIN'] = gain
-            hdu.header['RDNOISE'] = readnoise
-            hdu.header['SATLEVEL'] = satlevel
+            hdu.header['GAIN'] = (gain, "Gain from 1st channel in e-/ADU")
+            hdu.header['RDNOISE'] = (readnoise, "Readout noise from 1st channel in e-")
+            hdu.header['SATLEVEL'] = (satlevel, "Saturation level from 1st channel in ADUs")
             hdu_list.append(hdu)
         hdu_list.writeto(output_file, overwrite=True)
     print(f"✅ Rayos cósmicos corregidos: {output_file}")

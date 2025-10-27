@@ -558,10 +558,11 @@ def main():
                     )
                     combined_count += 1
                     processed_files.add(corrected_file)
+
                     if args.do_ADU_to_e:
                         # Calcular ganancia efectiva
                         effective_gain = calculate_effective_gain(args, gain_vector, weights=weights, extorder=extorder)
-                        print(f"ℹ️ Ganancia efectiva: {effective_gain:.3f} e-/ADU")
+                        print(f"ℹ️ Ganancia efectiva: {effective_gain:.3f} ADU/e-")
 
                         # Leer imagen combinada en memoria
                         with fits.open(combined_output) as hdul:
@@ -575,13 +576,13 @@ def main():
                                                     header=combined_hdr_ext1))  # HDU 1 con header original copiado
 
                         # Agregar info solo al primary HDU (HDU 0)
-                        e_hdul[0].header['GAIN_EFF'] = effective_gain
-                        e_hdul[0].header['HISTORY'] = f'Converted to e- with effective gain {effective_gain:.3f}'
+                        e_hdul[1].header['GAIN_EFF'] = (1 / effective_gain, "Effective Gain from weights in e-/ADU")
+                        e_hdul[1].header['HISTORY'] = f'Converted to e- with effective gain {effective_gain} ADU/e-'
 
                         # Guardar imagen en e-
                         e_output = combined_output.replace('.fits', '_e.fits')
                         e_hdul.writeto(e_output, overwrite=True)
-                        print(f"✅ Imagen combinada en e- guardada: {e_output} con ganancia efectiva: {effective_gain:.3f}")
+                        print(f"✅ Imagen combinada en e- guardada: {e_output}")
                 print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
 
 if __name__ == "__main__":
