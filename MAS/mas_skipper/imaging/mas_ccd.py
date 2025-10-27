@@ -173,6 +173,8 @@ def main():
                         help="ROI de señal para optimizar el ponderado: col_start col_end row_start row_end (1st ext). Def [375, 410, 470, 510]")
     parser.add_argument("--do-ADU-to-e", action="store_true", help="Transformar ADUs a e-")
 
+    parser.add_argument("--cleanup-intermediates", action="store_true", help="Eliminar archivos intermedios de procesado, dejando sólo 'comb_*.fits'")
+
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
@@ -594,6 +596,25 @@ def main():
                         e_hdul.writeto(e_output, overwrite=True)
                         print(f"✅ Imagen combinada en e- guardada: {e_output}")
                 print(f"✅ Total de imágenes combinadas generadas: {combined_count}")
+
+    # 8. Eliminar archivos intermedios si argumento es activado
+    if args.cleanup_intermediates:
+        import shutil
+        intermediate_patterns = [
+            f"{args.output}/o_*.fits",
+            f"{args.output}/bo_*.fits",
+            f"{args.output}/dbo_*.fits",
+            f"{args.output}/f*.fits",
+            f"{args.output}/c*.fits",
+            f"{args.output}/master_*.fits"  # Masters if not needed
+        ]
+        for pattern in intermediate_patterns:
+            files = glob.glob(pattern)
+            for file_path in files:
+                if not any('comb_' in file_path for _ in [1]):  # Avoid deleting comb_*
+                    shutil.rmtree(file_path) if os.path.isdir(file_path) else os.remove(file_path)
+                    #print(f"🗑️ Deleted intermediate: {file_path}")
+        print("🗑️ Limpieza completa: Sólo archivos 'comb_*.fits' fueron preservados.")
 
 if __name__ == "__main__":
     main()
