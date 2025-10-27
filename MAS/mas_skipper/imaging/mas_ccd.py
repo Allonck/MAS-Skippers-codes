@@ -562,7 +562,15 @@ def main():
                     if args.do_ADU_to_e:
                         # Calcular ganancia efectiva
                         effective_gain = calculate_effective_gain(args, gain_vector, weights=weights, extorder=extorder)
-                        print(f"ℹ️ Ganancia efectiva: {effective_gain:.3f} ADU/e-")
+                        print(f"ℹ️ Ganancia efectiva: {effective_gain} ADU/e-")
+
+                        # Calcular readout noise efectivo
+                        effective_readnoise = calculate_effective_gain(args, readnoise_vector, weights=weights,extorder=extorder)
+                        print(f"ℹ️ Readout noise efectivo: {effective_readnoise:.3f} e-")
+
+                        # Calcular satlevel efectivo
+                        effective_satlevel = calculate_effective_gain(args, satlevel_vector, weights=weights,extorder=extorder) / effective_gain
+                        print(f"ℹ️ Nivel de saturación efectivo: {effective_satlevel} e-")
 
                         # Leer imagen combinada en memoria
                         with fits.open(combined_output) as hdul:
@@ -577,6 +585,8 @@ def main():
 
                         # Agregar info solo al primary HDU (HDU 0)
                         e_hdul[1].header['GAIN_EFF'] = (1 / effective_gain, "Effective Gain from weights in e-/ADU")
+                        e_hdul[1].header['RDN_EFF'] = (effective_readnoise, "Effective Readout noise from weights in e-")
+                        e_hdul[1].header['SAT_EFF'] = (effective_satlevel, "Effective Saturation level from weights in e-")
                         e_hdul[1].header['HISTORY'] = f'Converted to e- with effective gain {effective_gain} ADU/e-'
 
                         # Guardar imagen en e-
