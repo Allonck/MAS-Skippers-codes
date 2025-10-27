@@ -140,6 +140,7 @@ def main():
     parser.add_argument("--full-reduction", action="store_true",
                         help="Ejecutar reducción completa (overscan, bias, dark, flat).")
     parser.add_argument("--reduction", action="store_true", help="Ejecutar reducción sin darks (overscan, bias, flat).")
+    parser.add_argument("--nsamp-reduction", action="store_true", help="Ejecutar reducción sin bias (overscan, flat).")
     parser.add_argument("--bias-pattern", type=str, default="frame_bias*.fits", help="Patrón de archivos bias.")
     parser.add_argument("--dark-pattern", type=str, default="frame_dark*.fits", help="Patrón de archivos dark.")
     parser.add_argument("--flat-pattern", type=str, default="frame_flat*.fits", help="Patrón de archivos flat.")
@@ -179,15 +180,15 @@ def main():
     os.makedirs(args.output, exist_ok=True)
 
     # Determinar pasos a ejecutar
-    make_master_bias = args.make_master_bias or args.full_reduction or args.reduction or args.do_bias_subtraction or args.make_master_dark or args.do_dark_subtraction or args.make_master_flat or args.do_flat_fielding
+    make_master_bias = args.make_master_bias or args.full_reduction or args.reduction or args.nsamp_reduction or args.do_bias_subtraction or args.make_master_dark or args.do_dark_subtraction or args.make_master_flat or args.do_flat_fielding
     make_master_dark = args.make_master_dark or args.full_reduction or args.do_dark_subtraction
-    make_master_flat = args.make_master_flat or args.full_reduction or args.reduction or args.do_flat_fielding
+    make_master_flat = args.make_master_flat or args.full_reduction or args.reduction or args.nsamp_reduction or args.do_flat_fielding
 
     do_bias_subtraction = args.do_bias_subtraction or args.full_reduction or args.reduction or args.do_dark_subtraction or args.do_flat_fielding #redefined
     do_dark_subtraction = args.make_master_dark or args.do_dark_subtraction or args.full_reduction #redefined
-    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
-    do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction
-    do_wcs = args.do_wcs or args.full_reduction or args.reduction
+    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.nsamp_reduction or args.reduction
+    do_cosmic_ray_correction = args.do_cosmic_ray_correction or args.full_reduction or args.nsamp_reduction
+    do_wcs = args.do_wcs or args.full_reduction or args.reduction or args.nsamp_reduction
     do_ADU_to_e = args.do_ADU_to_e
 
     # Generar vector de ROIs para overscan
@@ -224,7 +225,7 @@ def main():
     # Calcular readnoise una vez al inicio
     sci_files = sorted(glob.glob(os.path.join(args.raw, args.sci_pattern)))
     read_noise = None
-    if sci_files and (args.do_cosmic_ray_correction or args.full_reduction or args.reduction or do_bias_subtraction):
+    if sci_files and (args.do_cosmic_ray_correction or args.full_reduction or args.reduction or args.nsamp_reduction or do_bias_subtraction):
         print(f"📊 Calculando readout noise usando archivos {sci_files}...")
         roi_vector = roi_shifting(args.roi_overscan)
         read_noise = estimate_readnoise(sci_files, roi_vector=roi_vector)
@@ -413,7 +414,7 @@ def main():
     # 6. Procesamiento de imágenes de ciencia
     do_bias_subtraction = args.do_bias_subtraction or args.reduction or args.full_reduction
     do_dark_subtraction = args.do_dark_subtraction or args.full_reduction
-    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction
+    do_flat_fielding = args.do_flat_fielding or args.full_reduction or args.reduction or args.nsamp_reduction
     use_dark = do_dark_subtraction and dark_files and os.path.exists(mdark_path)
     if sci_files:
         print(f"🔬 Procesando {len(sci_files)} imágenes de ciencia...")
@@ -574,7 +575,7 @@ def main():
                     combined_count += 1
                     processed_files.add(corrected_file)
 
-                    if args.do_ADU_to_e:
+                    if do_ADU_to_e:
                         # Calcular ganancia efectiva
                         effective_gain = calculate_effective_gain(args, gain_vector, weights=weights, extorder=extorder)
                         print(f"ℹ️ Ganancia efectiva: {effective_gain} ADU/e-")
