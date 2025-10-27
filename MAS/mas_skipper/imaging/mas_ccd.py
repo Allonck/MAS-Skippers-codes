@@ -508,6 +508,9 @@ def main():
                     input_pattern = pattern
                     break
             if not corrected_files:
+                if args.nsamp_reduction:
+                    print("ℹ️ Modo nsamp-reduction: Solo overscan, sin combinación adicional.")
+                    return
                 print("⚠️ No se encontraron archivos corregidos para combinar. Generando archivos overscan.")
                 for f in sci_files:
                     overscan_file = os.path.join(args.output, f"o_{os.path.basename(f)}")
