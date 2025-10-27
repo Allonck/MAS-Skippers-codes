@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 1.0.2)
+## 🧰 Features (At the moment of 1.0.3)
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -16,6 +16,7 @@
 - ✅ Add WCS.
 - ✅ Add full ROI support.
 - ✅ ADUs to e- values available in final combined images.
+- ✅ Header history in final combined images.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
@@ -33,7 +34,6 @@ To verify the install:
 ```bash
 mas-ccd -h
 ```
----
 
 ## 📦 Configure Jupyter notebook with venv
 
@@ -94,4 +94,4 @@ deactivate
 ---
 ## Credits
 
-Developed by @Allonck, originally for internal use with the [SMARTS 0.9m telescope@Noirlab with the MAS-16ch belonging to LBNL & Fermilab].
+Developed by @Allonck, originally for internal use with the [SMARTS 0.9m telescope@CTIO with a 16ch-MAS belonging to LBNL & Fermilab, characterized and tested at NOIRLab].
