@@ -545,6 +545,7 @@ def main():
                     if args.comb_mode == 'weighted':
                         if os.path.exists(original_file):
                             weights = optimize_weights_from_raw(original_file, sig_box_base=args.sig_box_base,exclude_extensions=args.remove_ext, visualize_rois=args.view_weighted_rois)
+
                             #print(f"Pesos calculados desde {original_file}: {weights}")
                         else:
                             print(f"❌ Imagen raw {original_file} no encontrada. Usando pesos uniformes.")
@@ -558,6 +559,18 @@ def main():
                         comb_mode=args.comb_mode,
                         weights=weights
                     )
+
+                    # Agregar keywords de sig-box-base al header (siempre, para trazabilidad)
+                    with fits.open(combined_output, mode='update') as hdul:
+                        hdul[1].header['SIGBOXC1'] = (
+                        args.sig_box_base[0], 'Column start for signal ROI in weighted mode')
+                        hdul[1].header['SIGBOXC2'] = (
+                        args.sig_box_base[1], 'Column end for signal ROI in weighted mode')
+                        hdul[1].header['SIGBOXR1'] = (
+                        args.sig_box_base[2], 'Row start for signal ROI in weighted mode')
+                        hdul[1].header['SIGBOXR2'] = (
+                        args.sig_box_base[3], 'Row end for signal ROI in weighted mode')
+
                     combined_count += 1
                     processed_files.add(corrected_file)
 
@@ -605,7 +618,7 @@ def main():
             f"{args.output}/bo_*.fits",
             f"{args.output}/dbo_*.fits",
             f"{args.output}/f*.fits",
-            f"{args.output}/c*.fits",
+            #f"{args.output}/c*.fits",
             f"{args.output}/master_*.fits"  # Masters if not needed
         ]
         for pattern in intermediate_patterns:
@@ -614,7 +627,7 @@ def main():
                 if not any('comb_' in file_path for _ in [1]):  # Avoid deleting comb_*
                     shutil.rmtree(file_path) if os.path.isdir(file_path) else os.remove(file_path)
                     #print(f"🗑️ Deleted intermediate: {file_path}")
-        print("🗑️ Limpieza completa: Sólo archivos 'comb_*.fits' fueron preservados.")
+        print("🗑️ Limpieza completa: Sólo archivos 'comb_*.fits' y 'c*.fits' fueron preservados.")
 
 if __name__ == "__main__":
     main()
