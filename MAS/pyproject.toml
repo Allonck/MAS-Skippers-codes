@@ -1,6 +1,6 @@
 [project]
 name = "mas_skipper_pipeline"
-version = "1.0.3"
+version = "1.0.4"
 description = "Imaging reduction package for the MAS Skipper CCD"
 authors = [
     {name = "Christopher Montalbán", email = "christopher.montalban@userena.cl"}

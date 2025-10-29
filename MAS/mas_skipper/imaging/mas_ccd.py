@@ -133,7 +133,7 @@ def calculate_effective_gain(args, gain_vector, weights=None, extorder=None):
     return effective_gain
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v1.0.3 - No warranty of results.")
+    parser = argparse.ArgumentParser(description="MASSKIP v1.0.4 - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
