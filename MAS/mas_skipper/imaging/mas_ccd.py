@@ -34,8 +34,8 @@ CAMERA_CONFIGS = {
  np.float64(1569200.5)]  # [65000, 65000, 65000, 65000] #Asumir 28 ke-.
     },
     'seq+hh2d7': {
-        'gain': 48.0,  # Valor único
-        'satlevel': 2640000  # Asumir 55 ke-.
+        'gain': [48.0] * 16,  # Valor único
+        'satlevel': [2640000] * 16  # Asumir 55 ke-.
     },
     'seq+hh3': {
         'gain': [54.087,52.931,53.657,52.776,52.263,53.038,53.107,53.148,53.232,53.245,53.451,53.586,52.984,53.085,53.153,52.904],
@@ -58,11 +58,11 @@ CAMERA_CONFIGS = {
     },
     'v5+ulensing': {
         'gain': [52.0] * 16,
-        'satlevel': 260000  # Asumir 5ke-.
+        'satlevel': [260000] * 16  # Asumir 5ke-.
     },
     'other': {
-        'gain': 50.0,
-        'satlevel': 1400000  # Asumir 28ke-.
+        'gain': [50.0] * 16,
+        'satlevel': [1400000] * 16  # Asumir 28ke-.
     }
 }
 
