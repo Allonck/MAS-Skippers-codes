@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats, SigmaClip
 from astropy.visualization import ZScaleInterval, LinearStretch, AsinhStretch, ImageNormalize
@@ -141,18 +142,26 @@ def perform_photometry(file_path, aperture_radius=15.0, threshold=5.0, fwhm=3.0,
 
     return all_tables  # Lista de tablas (una por HDU)
 
-def visualize_photometry(file_path, phot_table, zoom_size=100):
+def visualize_photometry(file_path, phot_table, zoom_size=100, aperture_radius=15.0):
     """
-    Visualiza detección y fotometría.
+    Visualiza detección y fotometría con slider interactivo para extensiones (HDU 1 a N).
     """
+    # Load all HDUs into list
+    data_list = []
     with fits.open(file_path) as hdul:
-        data = hdul[1].data  # Asume HDU 1
-        header = hdul[1].header
+        for i in range(1, len(hdul)):
+            if hdul[i].data is not None and len(hdul[i].data.shape) == 2:
+                data_list.append(hdul[i].data.astype(float))
+    if not data_list:
+        print("No 2D HDUs found; skipping visualization.")
+        return
+
+    num_hdus = len(data_list)
+    print(f"Loaded {num_hdus} HDUs for slider (1 to {num_hdus}).")
 
     # Chequeo robusto: longitud y columnas clave
     if len(phot_table) == 0 or 'xcentroid' not in phot_table.colnames or 'ycentroid' not in phot_table.colnames:
-        print(
-            f"No sources detected (len={len(phot_table)}, columns={list(phot_table.colnames) if len(phot_table) > 0 else 'empty'}); skipping visualization.")
+        print(f"No sources detected (len={len(phot_table)}, columns={list(phot_table.colnames) if len(phot_table) > 0 else 'empty'}); skipping visualization.")
         return
 
     # Filtrar a top 50 fuentes por SNR para evitar sobrecarga
@@ -162,43 +171,85 @@ def visualize_photometry(file_path, phot_table, zoom_size=100):
         print("No high-SNR sources; skipping visualization.")
         return
 
-    positions = np.transpose(
-        (filtered_table['xcentroid'], filtered_table['ycentroid']))  # Corregido: 'xcentroid' (con 'i')
+    positions = np.transpose((filtered_table['xcentroid'], filtered_table['ycentroid']))
 
     # Brightest source for zoom (de tabla completa)
     brightest_idx = np.argmax(phot_table['aperture_sum'])
-    bright_pos = np.array([phot_table['xcentroid'][brightest_idx],
-                           phot_table['ycentroid'][brightest_idx]])  # Corregido: 'xcentroid' (con 'i')
-
-    x_min, x_max = max(0, bright_pos[0] - zoom_size), min(data.shape[1], bright_pos[0] + zoom_size)
-    y_min, y_max = max(0, bright_pos[1] - zoom_size), min(data.shape[0], bright_pos[1] + zoom_size)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-    norm = ImageNormalize(data, interval=ZScaleInterval(), stretch=AsinhStretch())
+    bright_pos = np.array([phot_table['xcentroid'][brightest_idx], phot_table['ycentroid'][brightest_idx]])
+    x_min, x_max = max(0, bright_pos[0] - zoom_size), min(data_list[0].shape[1], bright_pos[0] + zoom_size)
+    y_min, y_max = max(0, bright_pos[1] - zoom_size), min(data_list[0].shape[0], bright_pos[1] + zoom_size)
 
     # Rename PNG to "phot + input.png"
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     plot_name = f"phot_{base_name}.png"
 
+    # Initial plot (HDU 1)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    norm = ImageNormalize(data_list[0], interval=ZScaleInterval(), stretch=AsinhStretch())  # Initial norm for HDU 1
+
     # Full FOV subplot
-    ax1.imshow(data, norm=norm, cmap='gray', origin='lower')
-    for pos in np.transpose((filtered_table['xcentroid'], filtered_table['ycentroid'])):
-        circle1 = plt.Circle(pos, 15.0, color='cyan', fill=False, lw=2)
+    im1 = ax1.imshow(data_list[0], norm=norm, cmap='gray', origin='lower')
+    for pos in positions:
+        circle1 = plt.Circle(pos, aperture_radius, color='cyan', fill=False, lw=2)
         ax1.add_patch(circle1)
-    ax1.set_xlim(0, data.shape[1])
-    ax1.set_ylim(0, data.shape[0])
-    ax1.set_title(f'Full FOV (top {len(filtered_table)} sources)')
+    ax1.set_xlim(0, data_list[0].shape[1])
+    ax1.set_ylim(0, data_list[0].shape[0])
+    ax1.set_title(f'Full FOV (HDU 1, top {len(filtered_table)} sources)')
 
     # Zoom subplot
-    ax2.imshow(data, norm=norm, cmap='gray', origin='lower')
-    for pos in np.transpose((filtered_table['xcentroid'], filtered_table['ycentroid'])):
-        circle2 = plt.Circle(pos, 15.0, color='red', fill=False, lw=2)
+    im2 = ax2.imshow(data_list[0], norm=norm, cmap='gray', origin='lower')
+    for pos in positions:
+        circle2 = plt.Circle(pos, aperture_radius, color='red', fill=False, lw=2)
         ax2.add_patch(circle2)
     ax2.set_xlim(x_min, x_max)
     ax2.set_ylim(y_min, y_max)
-    ax2.set_title('Zoom on Brightest Source')
+    ax2.set_title('Zoom on Brightest Source (HDU 1)')
 
+    if num_hdus == 1:
+        # Single HDU: static plot, no slider
+        print("Single HDU: Showing static plot (no slider needed).")
+        plt.tight_layout()
+        plt.savefig(plot_name, dpi=300, bbox_inches='tight')
+        plt.show()
+        print(f"Gráfico guardado: {plot_name}")
+        return
+
+    # Multi-HDU: slider
+    print(f"Loaded {num_hdus} HDUs for slider (1 to {num_hdus}).")
+
+    # Slider for HDU index (1 to num_hdus)
+    ax_slider = plt.axes([0.2, 0.03, 0.6, 0.03])
+    slider = Slider(ax_slider, 'Extension', 1, num_hdus, valinit=1, valfmt='%d', valstep=1)
+
+    # Update function for slider
+    def update(val):
+        hdu_idx = int(slider.val) - 1  # 0-based index
+        current_data = data_list[hdu_idx]
+        norm = ImageNormalize(current_data, interval=ZScaleInterval(), stretch=AsinhStretch())
+
+        # Update full FOV
+        im1.set_data(current_data)
+        im1.set_norm(norm)
+        ax1.set_title(f'Full FOV (HDU {hdu_idx + 1}, top {len(filtered_table)} sources)')
+        ax1.relim()
+        ax1.autoscale_view()
+
+        # Update zoom
+        im2.set_data(current_data)
+        im2.set_norm(norm)
+        ax2.set_title(f'Zoom on Brightest Source (HDU {hdu_idx + 1})')
+        ax2.relim()
+        ax2.autoscale_view()
+
+        fig.canvas.draw_idle()
+
+    slider.on_changed(update)
+
+    # Save without slider
+    ax_slider.set_visible(False)
     plt.tight_layout()
     plt.savefig(plot_name, dpi=300, bbox_inches='tight')
+    ax_slider.set_visible(True)
+
     plt.show()
     print(f"Gráfico guardado: {plot_name}")

@@ -48,7 +48,7 @@ def main():
 
         if args.do_visualize:
             # Visualize the first HDU or brightest
-            visualize_photometry(file_path, all_tables[0] if all_tables else Table(), zoom_size=100)
+            visualize_photometry(file_path, all_tables[0] if all_tables else Table(), zoom_size=100, aperture_radius=args.aperture_radius)
 
 if __name__ == "__main__":
     main()
