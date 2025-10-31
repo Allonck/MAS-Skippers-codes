@@ -17,6 +17,7 @@
 - ✅ Add full ROI support.
 - ✅ ADUs to e- values available in final combined images.
 - ✅ Header history in final combined images.
+- ✅ Add Photometry module.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 
 ---
@@ -66,6 +67,22 @@ This will:
    * Annihilate cosmic rays.
 
    * Combine all the extensions into a Photometry / Astrometry ready Science image.
+
+## Auxiliary CLI
+
+mas-phot \
+  --input "science_filename_*.fits" \
+  --aperture-radius 10 \
+  --do-visualize \
+  --zeropoint 25
+  
+This will:
+
+   * Apply DAOFIND and DAOPHOT implementation of photutils.
+
+   * Plot apertures in a interactive window.
+
+   * Generate an output photometric catalog.
 
 ---
 

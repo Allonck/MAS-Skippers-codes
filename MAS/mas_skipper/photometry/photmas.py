@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats, SigmaClip
 from astropy.visualization import ZScaleInterval, LinearStretch, AsinhStretch, ImageNormalize
-from astropy.table import Table
 
 from photutils.detection import DAOStarFinder
 from photutils.aperture import CircularAperture, CircularAnnulus, aperture_photometry
