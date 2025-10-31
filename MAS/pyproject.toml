@@ -1,12 +1,17 @@
 [project]
 name = "mas_skipper_pipeline"
-version = "1.0.4"
+version = "2.0.0"
 description = "Imaging reduction package for the MAS Skipper CCD"
 authors = [
-    {name = "Christopher Montalbán", email = "christopher.montalban@userena.cl"}
+    {name = "Christopher Montalbán", email = "christopher.montalban@gmail.cl"}
 ]
 requires-python = ">=3.8"
-
+license = {text = "MIT"}  # O tu licencia
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 # ALL your project's runtime dependencies go here, directly under [project]
 dependencies = [
     "numpy",
@@ -14,7 +19,8 @@ dependencies = [
     "scikit-learn",
     "astropy>=5.2,<6.0",
     "ccdproc>=2.4",
-    "scipy==1.10.1"
+    "scipy>=1.11,<1.14",
+    "photutils>=2.3"
 ]
 
 [build-system]
@@ -26,3 +32,4 @@ packages = ["mas_skipper"]
 
 [project.scripts]
 mas-ccd = "mas_skipper.imaging.mas_ccd:main"
+mas-phot = "mas_skipper.photometry.mas_phot:main"
