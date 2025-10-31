@@ -8,6 +8,8 @@ from astropy.io import fits
 from ..core.core import roi_shifting, combine_science_images, optimize_weights_from_raw
 from .redmas import overscan_correction_combined, create_master_bias, bias_subtraction, create_master_dark, \
     dark_subtraction, create_master_flat_normalized, flat_fielding, cosmic_ray_correction, estimate_readnoise, add_wcs
+import importlib.metadata
+__version__ = importlib.metadata.version('mas_skipper_pipeline')  # Nombre de tu paquete en pyproject.toml
 
 CAMERA_CONFIGS = {
     'v5+hh2d7': {
@@ -133,7 +135,7 @@ def calculate_effective_gain(args, gain_vector, weights=None, extorder=None):
     return effective_gain
 
 def main():
-    parser = argparse.ArgumentParser(description="MASSKIP v1.0.4 - No warranty of results.")
+    parser = argparse.ArgumentParser(description=f"MASSKIP v{__version__} - No warranty of results.")
 
     parser.add_argument("--raw", type=str, default=".", help="Carpeta con los FITS raw.")
     parser.add_argument("--output", type=str, default="./reduced", help="Carpeta de salida.")
