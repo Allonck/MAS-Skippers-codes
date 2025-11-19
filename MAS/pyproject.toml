@@ -1,6 +1,6 @@
 [project]
 name = "mas_skipper_pipeline"
-version = "2.0.1"
+version = "2.1.0"
 description = "Imaging reduction package for the MAS Skipper CCD"
 authors = [
     {name = "Christopher Montalbán", email = "christopher.montalban@gmail.cl"}
@@ -20,7 +20,8 @@ dependencies = [
     "astropy>=5.2,<6.0",
     "ccdproc>=2.4",
     "scipy>=1.11,<1.14",
-    "photutils>=2.3"
+    "photutils>=2.3",
+    "astroalign>=2.6.2"
 ]
 
 [build-system]
@@ -33,3 +34,4 @@ packages = ["mas_skipper"]
 [project.scripts]
 mas-ccd = "mas_skipper.imaging.mas_ccd:main"
 mas-phot = "mas_skipper.photometry.mas_phot:main"
+mas-stack = "mas_skipper.stacking.mas_stack:main"
