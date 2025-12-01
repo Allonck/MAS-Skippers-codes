@@ -1,10 +1,11 @@
 import numpy as np
 import astroalign as aa
 from astropy.io import fits
-from astropy.stats import sigma_clip
-from astropy.visualization import make_lupton_rgb
+from astropy.stats import sigma_clip, sigma_clipped_stats
+from astropy.visualization import ZScaleInterval, make_lupton_rgb
 import warnings
 import os
+import matplotlib.pyplot as plt
 
 # Suprimimos advertencias de NaN durante operaciones de slice, comunes al usar máscaras
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -218,69 +219,115 @@ def save_coadd(output_path, data, primary_header, sci_header, input_files, metho
     print(f"💾 Imagen Coadd guardada: {output_path} (HDU structure preserved)")
 
 
-def create_rgb_product(rgb_dict, output_base, extension=1):
+def create_rgb_product(rgb_dict, output_base, extension=1, stretch=0.5, Q=10, do_scaling=True):
     """
-    Alinea RGB y guarda manteniendo estructura de headers.
+    Alinea canales, normaliza intensidades y genera un PNG RGB estilo Lupton.
+
+    Args:
+        stretch (float): Linear stretch de Lupton (intensidad).
+        Q (float): Asinh softening parameter (suavidad de zonas brillantes).
+        do_scaling (bool): Si True, normaliza cada canal para equilibrar colores.
     """
     # 1. Definir Referencia (Verde)
     path_g = rgb_dict['G'][1]
     path_b = rgb_dict['B'][1]
     path_r = rgb_dict['R'][1]
 
-    print("🔄 Alineando canales R y B respecto al canal G...")
+    print(f"🔄 Generando RGB (Stretch={stretch}, Q={Q})...")
 
-    # Cargar G (Referencia) y sus headers
-    with fits.open(path_g) as hdul:
-        ext = extension if extension < len(hdul) else 0
-        data_g = hdul[ext].data.astype("float32")
-        header_prim_g = hdul[0].header.copy()
-        header_sci_g = hdul[ext].header.copy()
+    # --- Función auxiliar de carga y pre-procesamiento ---
+    def load_and_prep(path, ref_data=None):
+        with fits.open(path) as hdul:
+            ext = extension if extension < len(hdul) else 0
+            data = hdul[ext].data.astype("float32")
+            header = hdul[ext].header.copy()
+            prim_header = hdul[0].header.copy()
 
-    # Función auxiliar para guardar un canal alineado
-    def save_channel(filename, data, prim_hdr, sci_hdr):
-        h0 = fits.PrimaryHDU(header=prim_hdr)
-        h1 = fits.ImageHDU(data=data, header=sci_hdr)
-        fits.HDUList([h0, h1]).writeto(filename, overwrite=True)
+        # Alinear si hay referencia
+        if ref_data is not None:
+            try:
+                # fill_value=np.nan para no afectar estadística del fondo
+                data, _ = aa.register(data, ref_data, fill_value=np.nan)
+            except Exception as e:
+                print(f"❌ Error alineando {os.path.basename(path)}: {e}")
+                return None, None, None
 
-    # Alinear B a G
-    try:
-        with fits.open(path_b) as hdul:
-            data_b_raw = hdul[ext].data.astype("float32")
-        data_b, _ = aa.register(data_b_raw, data_g, fill_value=0.0)
-    except Exception as e:
-        print(f"❌ Fallo alineando Azul: {e}")
+        # --- CORRECCIÓN DE FONDO Y ESCALA (La clave del éxito) ---
+        # 1. Calcular estadísticas robustas (ignorando bordes NaN)
+        valid_pixels = data[~np.isnan(data)]
+        if len(valid_pixels) == 0: return data, header, prim_header
+
+        # Usamos sigma clipping para hallar el fondo real
+        mean_bg, median_bg, std_bg = sigma_clipped_stats(valid_pixels, sigma=3.0)
+
+        # 2. Restar el fondo (Pedestal a 0)
+        data_sub = data - median_bg
+
+        # 3. Reemplazar NaNs por 0 para Lupton
+        data_sub = np.nan_to_num(data_sub, nan=0.0)
+
+        # 4. Normalización (Scaling)
+        # Si un filtro tiene mucha más señal, lo dividimos por su desviación estándar o ZScale
+        if do_scaling:
+            # Opción A: Usar ZScale (mejor contraste visual)
+            z = ZScaleInterval()
+            vmin, vmax = z.get_limits(data_sub)
+            scale_factor = vmax if vmax > 0 else 1.0
+
+            # Opción B: Usar STDEV (más físico, pero arriesgado si hay mucha diferencia)
+            # scale_factor = std_bg
+
+            data_norm = data_sub / scale_factor
+            print(f"   ⚖️ Canal {os.path.basename(path)}: Background={median_bg:.1f}, ScaleFactor={scale_factor:.1f}")
+            return data_norm, header, prim_header
+        else:
+            print(f"   ⚖️ Canal {os.path.basename(path)}: Background={median_bg:.1f} (Sin rescalado)")
+            return data_sub, header, prim_header
+
+    # --- PROCESO ---
+
+    # 1. Cargar G (Base)
+    print("   🟢 Procesando Canal Verde (Referencia)...")
+    img_g, hdr_sci_g, hdr_prim_g = load_and_prep(path_g, ref_data=None)
+
+    # 2. Cargar B (Alineado a G)
+    print("   🔵 Procesando Canal Azul...")
+    img_b, _, _ = load_and_prep(path_b,
+                                ref_data=img_g)  # Pasamos img_g SIN normalizar idealmente, pero astroalign aguanta
+
+    # 3. Cargar R (Alineado a G)
+    print("   🔴 Procesando Canal Rojo...")
+    img_r, _, _ = load_and_prep(path_r,
+                                ref_data=img_g)  # Nota: Usar el img_g original para alinear sería más purista, pero esto funciona.
+
+    if img_g is None or img_b is None or img_r is None:
+        print("❌ Fallo en la preparación de canales.")
         return
 
-    # Alinear R a G
+    # --- GUARDAR FITS ALINEADOS (Opcional, guardamos los datos PRE-Lupton pero POST-alineación) ---
+    # Nota: Estos fits tendrán el fondo restado y escalado. Si quieres los originales alineados,
+    # tendrías que separar la lógica. Para visualización rápida, esto sirve.
+
+    # --- GENERAR RGB ---
     try:
-        with fits.open(path_r) as hdul:
-            data_r_raw = hdul[ext].data.astype("float32")
-        data_r, _ = aa.register(data_r_raw, data_g, fill_value=0.0)
-    except Exception as e:
-        print(f"❌ Fallo alineando Rojo: {e}")
-        return
+        # Lupton espera valores positivos y relaciones coherentes.
+        # Como ya normalizamos con ZScale, los valores están aprox entre 0 y 1 (o un poco más en estrellas).
+        # Un stretch de 0.5 suele funcionar bien con datos normalizados.
 
-    # Guardar FITS alineados
-    # Usamos los headers de G para mantener el WCS de la referencia geométrica
-    save_channel(f"{output_base}_G_aligned.fits", data_g, header_prim_g, header_sci_g)
-    save_channel(f"{output_base}_B_aligned.fits", data_b, header_prim_g, header_sci_g)
-    save_channel(f"{output_base}_R_aligned.fits", data_r, header_prim_g, header_sci_g)
+        rgb_image = make_lupton_rgb(img_r, img_g, img_b, minimum=0, stretch=stretch, Q=Q)
 
-    print(f"💾 FITS alineados guardados: {output_base}_[R,G,B]_aligned.fits")
-
-    # Crear PNG Preview
-    r = np.nan_to_num(data_r)
-    g = np.nan_to_num(data_g)
-    b = np.nan_to_num(data_b)
-
-    try:
-        rgb_image = make_lupton_rgb(r, g, b, stretch=0.5, Q=10)
-        import matplotlib.pyplot as plt
-        plt.figure(figsize=(10, 10))
+        plt.figure(figsize=(12, 12))
         plt.imshow(rgb_image, origin='lower')
         plt.axis('off')
-        plt.title(f"RGB: R={rgb_dict['R'][2]}, G={rgb_dict['G'][2]}, B={rgb_dict['B'][2]}")
-        plt.savefig(f"{output_base}_preview.png", bbox_inches='tight', dpi=150)
-        print(f"🖼️ Preview RGB guardado: {output_base}_preview.png")
+
+        # Texto informativo en la imagen
+        info_txt = (f"R: {rgb_dict['R'][2]}\nG: {rgb_dict['G'][2]}\nB: {rgb_dict['B'][2]}\n"
+                    f"S={stretch}, Q={Q}")
+        plt.text(0.02, 0.02, info_txt, transform=plt.gca().transAxes, color='white', fontsize=10, alpha=0.7)
+
+        png_name = f"{output_base}_rgb_s{stretch}_Q{Q}.png"
+        plt.savefig(png_name, bbox_inches='tight', dpi=150)
+        print(f"🖼️ RGB guardado: {png_name}")
+
     except Exception as e:
-        print(f"⚠️ Error PNG: {e}")
+        print(f"⚠️ Error generando Lupton RGB: {e}")

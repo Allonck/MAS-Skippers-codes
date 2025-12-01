@@ -46,7 +46,12 @@ def main():
                         help="Umbral sigma para rejection (solo DEEP y si method='sigmaclip'). Default: 3.0.")
     parser.add_argument("--iters", type=int, default=5,
                         help="Número de iteraciones para clipping (solo DEEP y si method='sigmaclip'). Default: 5.")
-
+    parser.add_argument("--rgb-stretch", type=float, default=0.5,
+                        help="Lupton stretch (contraste lineal). Default: 0.5 (para datos normalizados, sino 8).")
+    parser.add_argument("--rgb-q", type=float, default=8.0,
+                        help="Lupton Q (suavidad asinh). Valores altos (10) suavizan, bajos (0.1) resaltan tenues. Default: 8.0.")
+    parser.add_argument("--no-rgb-scale", action="store_true",
+                        help="Desactivar el auto-balance de canales. Úsalo si quieres ver la diferencia real de flujo entre filtros.")
     args = parser.parse_args()
 
     # 1. Expandir lista de archivos
@@ -136,7 +141,14 @@ def main():
         # Quitamos extensión si el usuario la puso por error, ya que generamos _R.fits, _G.fits, etc.
         base_name = os.path.splitext(args.output)[0]
 
-        create_rgb_product(rgb_dict, base_name, extension=args.data_ext)
+        create_rgb_product(
+            rgb_dict,
+            base_name,
+            extension=args.data_ext,
+            stretch=args.rgb_stretch,
+            Q=args.rgb_q,
+            do_scaling=not args.no_rgb_scale  # True por defecto
+        )
         print(f"✨ Proceso RGB finalizado.")
 #--------------------------------------------------------------------------------------------
 
