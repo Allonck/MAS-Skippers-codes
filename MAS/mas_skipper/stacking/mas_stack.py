@@ -5,7 +5,7 @@ import os
 import sys
 import importlib.metadata
 
-from .stackmas import load_and_align_images, combine_stack, save_coadd
+from .stackmas import validate_inputs, load_and_align_images, combine_stack, save_coadd, create_rgb_product
 
 # Intentar obtener versión, fallback si no está instalado
 try:
@@ -26,20 +26,26 @@ def main():
     parser.add_argument("--output", type=str, default="coadd.fits",
                         help="Nombre del archivo de salida (default: coadd.fits).")
 
-    parser.add_argument("--method", type=str, choices=['median', 'mean', 'sigmaclip'], default='median',
-                        help="Método de combinación. 'median' es robusto y rápido. 'sigmaclip' es mejor para limpiar trazas de satélites pero lento.")
+    parser.add_argument("--mode", type=str, choices=['deep', 'rgb'], default='deep',
+                        help="DEV:Modo de operación: 'deep' (apilar mismo filtro) o 'rgb' (alinear 3 filtros distintos).")
+
+    # --- Configuración FITS (HDU 0 vs 1) ---
+    parser.add_argument("--ext", type=int, default=0,
+                        help="Extensión donde leer el HEADER de FILTROS. Tus archivos suelen tenerlo en 0.")
+    parser.add_argument("--data-ext", type=int, default=1,
+                        help="Extensión donde está la IMAGEN (PIXELES). Tus archivos 'comb_' suelen tenerla en 1.")
 
     parser.add_argument("--ref-index", type=int, default=0,
                         help="Índice de la imagen a usar como referencia de alineación (0-based). Default: 0 (la primera).")
 
-    parser.add_argument("--ext", type=int, default=1,
-                        help="Número de extensión FITS a leer. Para archivos comb_*.fits de mas-ccd es 1.")
+    parser.add_argument("--method", type=str, choices=['median', 'mean', 'sigmaclip'], default='median',
+                        help="Método de combinación (SOLO DEEP). 'median' es robusto y rápido. 'sigmaclip' es mejor para limpiar trazas de satélites pero lento.")
 
     # Parámetros avanzados para sigma clipping
     parser.add_argument("--sigma", type=float, default=3.0,
-                        help="Umbral sigma para rejection (solo si method='sigmaclip'). Default: 3.0.")
+                        help="Umbral sigma para rejection (solo DEEP y si method='sigmaclip'). Default: 3.0.")
     parser.add_argument("--iters", type=int, default=5,
-                        help="Número de iteraciones para clipping (solo si method='sigmaclip'). Default: 5.")
+                        help="Número de iteraciones para clipping (solo DEEP y si method='sigmaclip'). Default: 5.")
 
     args = parser.parse_args()
 
@@ -71,31 +77,93 @@ def main():
     if args.method == 'sigmaclip':
         print(f"   Configuración Clip: σ={args.sigma}, iters={args.iters}")
 
-    # 2. Cargar y Alinear
-    aligned_stack, ref_header, success_files = load_and_align_images(
-        files,
-        reference_idx=args.ref_index,
-        extension=args.ext
-    )
+    # 2. VALIDACIÓN DE FILTROS Y MODO
+    #    Usamos args.ext (0) para leer los filtros
+    valid, processed_info = validate_inputs(files, mode=args.mode, ext=args.ext)
 
-    if aligned_stack is None:
-        print("❌ Fallo crítico en alineación. Abortando.")
+    if not valid:
+        print("❌ La validación de entradas falló. Revisa los mensajes anteriores.")
         sys.exit(1)
 
-    print(f"✅ Alineación exitosa de {len(success_files)}/{len(files)} imágenes.")
+    # 3. EJECUCIÓN SEGÚN MODO
 
-    # 3. Combinar
-    final_image = combine_stack(
-        aligned_stack,
-        method=args.method,
-        sigma=args.sigma,
-        maxiters=args.iters
-    )
+    # --- MODO DEEP (Apilado) ---
+    if args.mode == 'deep':
+        files_to_stack = processed_info  # validate_inputs devuelve la lista limpia en este modo
 
-    # 4. Guardar
-    save_coadd(args.output, final_image, ref_header, success_files, args.method)
+        if len(files_to_stack) < 2:
+            print(f"⚠️ Se encontró solo {len(files_to_stack)} archivo válido. Se necesitan al menos 2 para apilar.")
+            sys.exit(1)
 
-    print(f"✨ Proceso finalizado. Output: {args.output}")
+        print(f"🚀 Iniciando DEEP STACK con {len(files_to_stack)} imágenes.")
+        print(f"   Método: {args.method.upper()} | Data Ext: {args.data_ext}")
+
+        # A. Cargar y Alinear (Ahora devuelve 4 valores)
+        aligned_stack, ref_prim_header, ref_sci_header, success_files = load_and_align_images(
+            files_to_stack,
+            reference_idx=args.ref_index,
+            extension=args.data_ext  # Usamos data-ext (1) para leer imagen
+        )
+
+        if aligned_stack is None:
+            print("❌ Fallo crítico en alineación (insuficientes imágenes exitosas).")
+            sys.exit(1)
+
+        print(f"✅ Alineación exitosa de {len(success_files)}/{len(files_to_stack)} imágenes.")
+
+        # B. Combinar
+        final_image = combine_stack(
+            aligned_stack,
+            method=args.method,
+            sigma=args.sigma,
+            maxiters=args.iters
+        )
+
+        # C. Guardar (Pasando ambos headers)
+        # Asegurar extensión .fits
+        out_name = args.output if args.output.endswith('.fits') else f"{args.output}.fits"
+
+        save_coadd(out_name, final_image, ref_prim_header, ref_sci_header, success_files, args.method)
+        print(f"✨ Deep Field finalizado: {out_name}")
+
+    # --- MODO RGB (Color) ---
+    elif args.mode == 'rgb':
+        rgb_dict = processed_info  # validate_inputs devuelve un diccionario {'R':.., 'G':.., 'B':..}
+
+        print(f"🚀 Iniciando RGB ALIGNMENT.")
+        print(f"   Base de salida: {args.output}")
+
+        # Quitamos extensión si el usuario la puso por error, ya que generamos _R.fits, _G.fits, etc.
+        base_name = os.path.splitext(args.output)[0]
+
+        create_rgb_product(rgb_dict, base_name, extension=args.data_ext)
+        print(f"✨ Proceso RGB finalizado.")
+#--------------------------------------------------------------------------------------------
+
+    # # 2. Cargar y Alinear
+    # aligned_stack, ref_prim_header, ref_sci_header, success = load_and_align_images(
+    #     files_to_stack,
+    #     reference_idx=args.ref_index,
+    #     extension=args.data_ext
+    # )
+    #
+    # if aligned_stack is None:
+    #     print("❌ Fallo crítico en alineación. Abortando.")
+    #     sys.exit(1)
+    #
+    # print(f"✅ Alineación exitosa de {len(success_files)}/{len(files)} imágenes.")
+    #
+    # # 3. Combinar
+    # final_image = combine_stack(
+    #     aligned_stack,
+    #     method=args.method,
+    #     sigma=args.sigma,
+    #     maxiters=args.iters
+    # )
+    #
+    # # 4. Guardar
+    # save_coadd(out_name, final_image, ref_prim_header, ref_sci_header, success, args.method)
+    # print(f"✨ Proceso finalizado. Output: {args.output}")
 
 if __name__ == "__main__":
     main()
