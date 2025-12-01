@@ -131,7 +131,7 @@ def get_filter_from_header(file_path, ext=0):
 
         # Lógica de retorno
         if len(valid_filters) == 0:
-            #Si todo fue ignorado (ej: 'OPEN1 OPEN2'), devolver unknown o raw.
+            #Sitodo fue ignorado (ej: OPEN1 OPEN2), devolver unknown o raw.
             return "unknown"
         elif len(valid_filters) == 1:
             return valid_filters[0]  # El caso ideal
