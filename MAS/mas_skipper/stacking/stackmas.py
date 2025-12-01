@@ -324,6 +324,25 @@ def create_rgb_product(rgb_dict, output_base, extension=1, stretch=0.5, Q=10, do
             try:
                 # fill_value=np.nan para no afectar estadística del fondo
                 data, _ = aa.register(data, ref_data, fill_value=np.nan)
+            except aa.MaxIterError:
+                print(f"⚠️ Falló alineación estándar en {os.path.basename(path)}. Reintentando con mayor sensibilidad...")
+                try:
+                    # INTENTO 2: Parámetros relajados
+                    # detection_sigma=2: Detecta estrellas mucho más débiles (cuidado con el ruido)
+                    # min_area=3: Acepta estrellas más pequeñas (menos pixeles)
+                    # max_control_points=50: Intenta matchear más estrellas (default es 30 o 50)
+                    data, _ = aa.register(
+                        data,
+                        ref_data,
+                        fill_value=np.nan,
+                        detection_sigma=2.0,
+                        min_area=3,
+                        max_control_points=100
+                    )
+                    print(f"   ✅ Reintento exitoso.")
+                except Exception as e:
+                    print(f"❌ Falló el reintento de alineación: {e}")
+                    return None, None, None
             except Exception as e:
                 print(f"❌ Error alineando {os.path.basename(path)}: {e}")
                 return None, None, None
