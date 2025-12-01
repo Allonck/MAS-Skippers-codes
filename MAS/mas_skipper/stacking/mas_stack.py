@@ -52,6 +52,8 @@ def main():
                         help="Lupton Q (suavidad asinh). Valores altos (10) suavizan, bajos (0.1) resaltan tenues. Default: 8.0.")
     parser.add_argument("--no-rgb-scale", action="store_true",
                         help="Desactivar el auto-balance de canales. Úsalo si quieres ver la diferencia real de flujo entre filtros.")
+    parser.add_argument("--match-psf", action="store_true",
+                        help="Activa PSF Matching: suaviza los canales nítidos para igualar el seeing del peor canal. Reduce halos de color.")
     args = parser.parse_args()
 
     # 1. Expandir lista de archivos
@@ -147,7 +149,8 @@ def main():
             extension=args.data_ext,
             stretch=args.rgb_stretch,
             Q=args.rgb_q,
-            do_scaling=not args.no_rgb_scale  # True por defecto
+            do_scaling=not args.no_rgb_scale,  # True por defecto
+            match_psf =args.match_psf
         )
         print(f"✨ Proceso RGB finalizado.")
 #--------------------------------------------------------------------------------------------

@@ -1,11 +1,13 @@
 import numpy as np
 import astroalign as aa
 from astropy.io import fits
-from astropy.stats import sigma_clip, sigma_clipped_stats
+from astropy.stats import sigma_clip, sigma_clipped_stats, gaussian_fwhm_to_sigma
 from astropy.visualization import ZScaleInterval, make_lupton_rgb
 import warnings
 import os
 import matplotlib.pyplot as plt
+from astropy.convolution import convolve, Gaussian2DKernel
+from photutils.detection import IRAFStarFinder
 
 # Suprimimos advertencias de NaN durante operaciones de slice, comunes al usar máscaras
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -219,7 +221,81 @@ def save_coadd(output_path, data, primary_header, sci_header, input_files, metho
     print(f"💾 Imagen Coadd guardada: {output_path} (HDU structure preserved)")
 
 
-def create_rgb_product(rgb_dict, output_base, extension=1, stretch=0.5, Q=10, do_scaling=True):
+def measure_fwhm(data, threshold=50.0):
+    """
+    Estima el FWHM promedio de la imagen usando momentos (IRAFStarFinder).
+    threshold alto (50 sigma) para usar solo estrellas brillantes y no ruido.
+    """
+    # 1. Estadísticas básicas
+    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
+
+    # 2. Usamos IRAFStarFinder.
+    # fwhm=3.0 es solo un valor inicial para la búsqueda, luego él calcula el real.
+    # Usamos un umbral alto (threshold * 5) para asegurar que medimos estrellas claras.
+    finder = IRAFStarFinder(threshold=5.0 * std, fwhm=3.0, minsep_fwhm=5, roundlo=-0.5, roundhi=0.5)
+
+    # Restamos la mediana para que el buscador trabaje sobre el fondo 0
+    sources = finder(data - median)
+
+    if sources is None or len(sources) < 3:
+        print("   ⚠️ Pocas fuentes para medir FWHM (Intentando umbral más bajo...).")
+        # Reintento con umbral más bajo si falló
+        finder = IRAFStarFinder(threshold=3.0 * std, fwhm=3.0)
+        sources = finder(data - median)
+
+        if sources is None or len(sources) == 0:
+            print("   ⚠️ No se pudieron detectar estrellas para FWHM. Asumiendo 3.0 px por defecto.")
+            return 3.0
+
+    # 3. Filtrar resultados válidos
+    # IRAFStarFinder devuelve la columna 'fwhm'. Filtramos valores físicos.
+    # Excluimos NaNs y valores extremos (ej. rayos cósmicos muy finos < 1.0 o nubes > 20.0)
+
+    if 'fwhm' not in sources.colnames:
+        print("   ⚠️ Columna FWHM no encontrada en resultados. Usando default.")
+        return 3.0
+
+    valid_mask = (sources['fwhm'] > 1.2) & (sources['fwhm'] < 15.0)
+    valid_sources = sources[valid_mask]
+
+    if len(valid_sources) == 0:
+        print("   ⚠️ Estrellas detectadas pero con FWHM inválidos. Usando default 3.0.")
+        return 3.0
+
+    # 4. Usar la mediana para evitar outliers
+    median_fwhm = np.median(valid_sources['fwhm'])
+
+    # Opcional: Mostrar cuántas estrellas se usaron
+    # print(f"      (Medido con {len(valid_sources)} estrellas)")
+
+    return median_fwhm
+
+
+def convolve_to_target(data, current_fwhm, target_fwhm):
+    """
+    Suaviza la imagen para degradar su FWHM actual al FWHM objetivo.
+    Sigma_kernel = sqrt(sigma_target^2 - sigma_current^2)
+    """
+    if target_fwhm <= current_fwhm:
+        return data  # No hacemos nada si ya es peor o igual
+
+    # Convertir FWHM a Sigma (FWHM = 2.355 * Sigma)
+    sigma_curr = current_fwhm * gaussian_fwhm_to_sigma
+    sigma_targ = target_fwhm * gaussian_fwhm_to_sigma
+
+    # Calcular el sigma del kernel necesario para alcanzar el target
+    # Regla de suma de cuadraturas: sigma_final^2 = sigma_inicial^2 + sigma_kernel^2
+    sigma_kernel = np.sqrt(sigma_targ ** 2 - sigma_curr ** 2)
+
+    kernel = Gaussian2DKernel(x_stddev=sigma_kernel)
+
+    # Convolucionar (usamos boundary='extend' para bordes)
+    # nan_treatment='interpolate' es útil si tienes NaNs del alineado
+    convolved_data = convolve(data, kernel, boundary='extend')
+
+    return convolved_data
+
+def create_rgb_product(rgb_dict, output_base, extension=1, stretch=0.5, Q=10, do_scaling=True, match_psf=True):
     """
     Alinea canales, normaliza intensidades y genera un PNG RGB estilo Lupton.
 
@@ -304,6 +380,22 @@ def create_rgb_product(rgb_dict, output_base, extension=1, stretch=0.5, Q=10, do
         print("❌ Fallo en la preparación de canales.")
         return
 
+    # --- NUEVO: PSF MATCHING ---
+    if match_psf:
+        print("   📏 Midiendo Seeing (FWHM) para PSF Matching...")
+        fwhm_g = measure_fwhm(img_g)
+        fwhm_b = measure_fwhm(img_b)
+        fwhm_r = measure_fwhm(img_r)
+
+        target_fwhm = max(fwhm_g, fwhm_b, fwhm_r)
+        print(f"      FWHM medidos -> B:{fwhm_b:.2f} px, G:{fwhm_g:.2f} px, R:{fwhm_r:.2f} px")
+        print(f"      Target FWHM -> {target_fwhm:.2f} px (Degradando canales nítidos...)")
+
+        img_b = convolve_to_target(img_b, fwhm_b, target_fwhm)
+        img_g = convolve_to_target(img_g, fwhm_g, target_fwhm)
+        img_r = convolve_to_target(img_r, fwhm_r, target_fwhm)
+    else:
+        print("   ⏩ Saltando PSF Matching.")
     # --- GUARDAR FITS ALINEADOS (Opcional, guardamos los datos PRE-Lupton pero POST-alineación) ---
     # Nota: Estos fits tendrán el fondo restado y escalado. Si quieres los originales alineados,
     # tendrías que separar la lógica. Para visualización rápida, esto sirve.
