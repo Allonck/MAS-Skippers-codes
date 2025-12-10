@@ -1,6 +1,6 @@
 [project]
 name = "mas_skipper_pipeline"
-version = "2.2.0"
+version = "2.3.0"
 description = "Imaging reduction package for the MAS Skipper CCD"
 authors = [
     {name = "Christopher Montalbán", email = "christopher.montalban@gmail.cl"}
@@ -35,3 +35,4 @@ packages = ["mas_skipper"]
 mas-ccd = "mas_skipper.imaging.mas_ccd:main"
 mas-phot = "mas_skipper.photometry.mas_phot:main"
 mas-stack = "mas_skipper.stacking.mas_stack:main"
+mas-inspect = "mas_skipper.inspect.mas_inspect:main"
