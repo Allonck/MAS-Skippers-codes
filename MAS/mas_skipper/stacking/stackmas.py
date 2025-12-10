@@ -7,7 +7,8 @@ import warnings
 import os
 import matplotlib.pyplot as plt
 from astropy.convolution import convolve, Gaussian2DKernel
-from photutils.detection import IRAFStarFinder
+from photutils.detection import DAOStarFinder, IRAFStarFinder
+from scipy.ndimage import shift
 
 # Suprimimos advertencias de NaN durante operaciones de slice, comunes al usar máscaras
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -144,48 +145,145 @@ def get_filter_from_header(file_path, ext=0):
             return "_".join(valid_filters)
 
 
+# --- FUNCIÓN DE DETECCIÓN DE FUENTES ---
+def find_sources_custom(data, sigma_threshold=3.0, fwhm=4.0):
+    """
+    Detecta fuentes puntuales filtrando por REDONDEZ para evitar rayos cósmicos.
+    """
+    mean, median, std = sigma_clipped_stats(data, sigma=3.0)
+
+    # Configuración estricta:
+    # roundlo/roundhi: Filtra objetos alargados (rayos cósmicos, trazas).
+    # sharplo/sharphi: Filtra objetos demasiado puntiagudos (hot pixels) o difusos (galaxias).
+    daofind = DAOStarFinder(
+        fwhm=fwhm,
+        threshold=sigma_threshold * std,
+        roundlo=-1.0, roundhi=1.0,  # Solo objetos redondos
+        sharplo=0.2, sharphi=1.0  # Solo objetos con perfil estelar
+    )
+    sources = daofind(data - median)
+
+    # Si falla la detección estricta, intentamos una relajada (sin filtros de forma)
+    if sources is None or len(sources) < 3:
+        # print("   ⚠️ Pocas fuentes estrictas. Relajando filtros...")
+        daofind = DAOStarFinder(fwhm=fwhm, threshold=3.0 * std)
+        sources = daofind(data - median)
+
+        if sources is None or len(sources) < 3:
+            # Último intento desesperado: bajar umbral
+            daofind = DAOStarFinder(fwhm=fwhm, threshold=2.0 * std)
+            sources = daofind(data - median)
+            if sources is None or len(sources) < 3:
+                return None
+
+    # Ordenar por flujo
+    sources.sort('flux')
+    sources.reverse()
+
+    # CRÍTICO: Reducimos de 50 a 20 fuentes máximas.
+    # Si hay pocas estrellas reales, no queremos rellenar la lista con ruido.
+    top_sources = sources[:20]
+
+    return np.transpose((top_sources['xcentroid'], top_sources['ycentroid']))
+
+
 def load_and_align_images(file_list, reference_idx=0, extension=1):
     """
-    Alinea imágenes y devuelve headers primario y secundario de la referencia.
+    Carga y alinea.
+    MEJORA: Votación restringida a +/- 100 px para evitar falsos positivos lejanos.
     """
     ref_file = file_list[reference_idx]
-    print(f"⭐ Referencia de alineación: {ref_file}")
+    print(f"⭐ Referencia: {os.path.basename(ref_file)}")
 
     with fits.open(ref_file) as hdul:
-        # Guardamos AMBOS headers para reconstruir la estructura después
         ref_primary_header = hdul[0].header.copy()
-
-        if extension < len(hdul):
-            ref_data = hdul[extension].data.astype("float32")
-            ref_sci_header = hdul[extension].header.copy()
-        else:
-            print(f"⚠️ Extensión {extension} no hallada. Usando 0.")
-            ref_data = hdul[0].data.astype("float32")
-            ref_sci_header = hdul[0].header.copy()
+        target_ext = extension if extension < len(hdul) else 0
+        ref_data = hdul[target_ext].data.astype("float32")
+        ref_sci_header = hdul[target_ext].header.copy()
 
     aligned_images = [ref_data]
     success_files = [ref_file]
 
+    # 1. Extraer fuentes de Referencia
+    ref_xy = find_sources_custom(ref_data)
+    if ref_xy is None:
+        print("❌ Error FATAL: La referencia no tiene estrellas (<3).")
+        return None, None, None, []
+
+    print(f"   (Ref: {len(ref_xy)} estrellas para anclaje)")
+
     for i, file_path in enumerate(file_list):
         if i == reference_idx: continue
+        fname = os.path.basename(file_path)
+
         try:
             with fits.open(file_path) as hdul:
                 target_ext = extension if extension < len(hdul) else 0
                 source_data = hdul[target_ext].data.astype("float32")
 
-            registered_image, _ = aa.register(source_data, ref_data, fill_value=np.nan)
-            aligned_images.append(registered_image)
-            success_files.append(file_path)
-            print(f"✅ Alineado: {os.path.basename(file_path)}")
+            # 2. Extraer fuentes
+            src_xy = find_sources_custom(source_data)
+
+            if src_xy is None:
+                print(f"❌ {fname}: Sin estrellas suficientes.")
+                continue
+
+            # --- ESTRATEGIA 1: GEOMETRÍA (ASTROALIGN) ---
+            try:
+                transf, (s_list, t_list) = aa.find_transform(src_xy, ref_xy)
+                reg_img, _ = aa.apply_transform(transf, source_data, ref_data, fill_value=np.nan)
+                aligned_images.append(reg_img)
+                success_files.append(file_path)
+                continue
+            except Exception:
+                pass
+
+                # --- ESTRATEGIA 2: VOTACIÓN RESTRINGIDA ---
+            try:
+                diffs = ref_xy[:, np.newaxis, :] - src_xy[np.newaxis, :, :]
+                diffs = diffs.reshape(-1, 2)
+
+                # CAMBIO CLAVE: Restringimos la búsqueda a +/- 50 pixeles
+                # Si el telescopio salta más que eso, hay problemas mayores.
+                # Bins de 1 pixel para mayor precisión en el pico
+                search_radius = 50
+                bins = np.arange(-search_radius, search_radius, 1)
+
+                H, xedges, yedges = np.histogram2d(diffs[:, 0], diffs[:, 1], bins=bins)
+
+                peak_idx = np.unravel_index(np.argmax(H), H.shape)
+
+                # Validar que el pico sea significativo
+                if H[peak_idx] < 2:
+                    # Intento secundario: ampliar rango si falló el local (por si hubo un salto real)
+                    # print(f"   ⚠️ Drift no encontrado en +/-{search_radius}. Ampliando...")
+                    bins_wide = np.arange(-200, 200, 2)
+                    H, xedges, yedges = np.histogram2d(diffs[:, 0], diffs[:, 1], bins=bins_wide)
+                    peak_idx = np.unravel_index(np.argmax(H), H.shape)
+                    if H[peak_idx] < 2:
+                        raise ValueError("Ruido aleatorio (sin consenso).")
+
+                dx_val = xedges[peak_idx[0]]
+                dy_val = yedges[peak_idx[1]]
+
+                # Shift final
+                shift_vector = (dy_val, dx_val)
+                reg_img = shift(source_data, shift_vector, cval=np.nan, order=1)
+
+                print(f"   ⚓ Alineado (Voto: y={dy_val:.1f}, x={dx_val:.1f}): {fname}")
+                aligned_images.append(reg_img)
+                success_files.append(file_path)
+
+            except Exception as e:
+                print(f"❌ Falló alineación de {fname}: {e}")
+
         except Exception as e:
-            print(f"❌ Error en {os.path.basename(file_path)}: {e}")
+            print(f"❌ Error I/O {fname}: {e}")
 
     if len(aligned_images) < 2:
-        return None, None, None, []  # Cambiado return signature
+        return None, None, None, []
 
-    aligned_stack = np.array(aligned_images)
-    # Devolvemos (stack, primary_header, sci_header, lista_archivos)
-    return aligned_stack, ref_primary_header, ref_sci_header, success_files
+    return np.array(aligned_images), ref_primary_header, ref_sci_header, success_files
 
 def combine_stack(stack, method='median', sigma=3.0, maxiters=5):
     """Combina el cubo de imágenes."""
