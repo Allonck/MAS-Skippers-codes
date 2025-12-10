@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 2.1.1
+## 🧰 Features (At the moment of 2.2.0
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -20,7 +20,7 @@
 - ✅ Add Photometry module.
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 - ⚙️ CLI tool: `mas-phot` for photometry analysis.
-- ⚙️ CLI tool: `mas-stack` for stacking and rgb composing (experimental).
+- ⚙️ CLI tool: `mas-stack` for stacking and rgb composing.
 
 ---
 
