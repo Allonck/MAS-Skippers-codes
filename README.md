@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 2.2.0
+## 🧰 Features (At the moment of 2.3.0
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
@@ -21,6 +21,7 @@
 - ⚙️ CLI tool: `mas-ccd` for batch reduction.
 - ⚙️ CLI tool: `mas-phot` for photometry analysis.
 - ⚙️ CLI tool: `mas-stack` for stacking and rgb composing.
+- ⚙️ CLI tool: `mas-inspect` for flat-normalization tuning.
 
 ---
 
