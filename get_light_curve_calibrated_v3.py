@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURACIÓN ---
-ZP_FINAL = -23.274    
+ZP_FINAL = -23.238    
 K_FINAL  = 0.104      
 BAND_NAME = 'R'       
 
