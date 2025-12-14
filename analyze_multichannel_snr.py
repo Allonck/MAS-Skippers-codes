@@ -19,8 +19,8 @@ DIRS = {
 
 # --- ¡¡AJUSTA ESTAS COORDENADAS VIENDO TU IMAGEN!! ---
 GALAXY_CENTER = (329, 412)  # Centro del núcleo (x,y)
-ARM_OFFSET    = (0, 60)    # Desplazamiento en píxeles hacia un brazo débil
-SKY_CENTER    = (320, 660)  # (x, y) de una zona vacía sin estrellas
+ARM_OFFSET    = (5, 80)    # Desplazamiento en píxeles hacia un brazo débil
+SKY_CENTER    = (430, 405)  # (x, y) de una zona vacía sin estrellas
 
 # Radios de apertura (pix)
 R_CORE = 15
@@ -93,7 +93,7 @@ def analyze_channels():
                 
                 # --- VISUALIZACIÓN ---
                 # Zoom centrado en la galaxia
-                size = 40
+                size = 180
                 y1, y2 = int(GALAXY_CENTER[1]-size), int(GALAXY_CENTER[1]+size)
                 x1, x2 = int(GALAXY_CENTER[0]-size), int(GALAXY_CENTER[0]+size)
                 cutout = data[y1:y2, x1:x2]
@@ -117,7 +117,8 @@ def analyze_channels():
             print(f"Error leyendo {filepath}: {e}")
 
     plt.tight_layout()
-    plt.savefig('galaxy_channel_comparison.png')
+    #plt.savefig('galaxy_channel_comparison.png')
+    plt.savefig('galaxy_channel_comparison.png', bbox_inches='tight', pad_inches=0.1)
     print("✅ Guardado mapa visual: galaxy_channel_comparison.png")
 
     if not results: return
