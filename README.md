@@ -4,7 +4,7 @@
 
 ---
 
-## 🧰 Features (At the moment of 2.3.1
+## 🧰 Features (At the moment of 2.3.2
 
 - ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
 - ✅ Pixel-by-pixel bias subtraction.
