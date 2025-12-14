@@ -5,6 +5,7 @@ from matplotlib.widgets import Slider
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats, SigmaClip
 from astropy.visualization import ZScaleInterval, LinearStretch, AsinhStretch, ImageNormalize
+from astropy.modeling import models, fitting
 
 from photutils.detection import DAOStarFinder
 from photutils.aperture import CircularAperture, CircularAnnulus, aperture_photometry
@@ -22,6 +23,58 @@ plt.rcParams['ytick.labelsize'] = 12 / 2
 plt.rcParams['legend.fontsize'] = 12 / 2
 plt.rcParams['figure.dpi'] = 300 / 2
 plt.rcParams['savefig.bbox'] = 'tight'
+
+
+# NUEVA FUNCIÓN PARA MEDIR FWHM REAL
+def measure_fwhm_robust(data, x, y, box_size=15):
+    """
+    Ajusta una Gaussiana 2D para medir el FWHM real de una fuente.
+    """
+    # Recorte alrededor de la fuente
+    x_int, y_int = int(round(x)), int(round(y))
+    half = box_size // 2
+
+    # Límites seguros
+    y1 = max(0, y_int - half)
+    y2 = min(data.shape[0], y_int + half + 1)
+    x1 = max(0, x_int - half)
+    x2 = min(data.shape[1], x_int + half + 1)
+
+    cutout = data[y1:y2, x1:x2]
+
+    # Si el recorte es muy chico o vacío, retornar NaN
+    if cutout.shape[0] < 3 or cutout.shape[1] < 3:
+        return np.nan
+
+    # Crear grid de coordenadas locales
+    y_grid, x_grid = np.mgrid[:cutout.shape[0], :cutout.shape[1]]
+
+    # Modelo inicial: Gaussiana 2D
+    # Amplitud = max del recorte
+    # x_mean, y_mean = centro del recorte
+    g_init = models.Gaussian2D(amplitude=np.nanmax(cutout),
+                               x_mean=cutout.shape[1] / 2,
+                               y_mean=cutout.shape[0] / 2,
+                               x_stddev=2.0, y_stddev=2.0)
+
+    # Fitter
+    fit_g = fitting.LevMarLSQFitter()
+    try:
+        g = fit_g(g_init, x_grid, y_grid, cutout)
+
+        # Convertir sigma a FWHM: FWHM = 2.355 * sigma
+        # Promediamos x_stddev y y_stddev para un solo valor de seeing
+        sigma_avg = (g.x_stddev.value + g.y_stddev.value) / 2.0
+        fwhm_meas = sigma_avg * 2.355
+
+        # Filtros de sanidad (para evitar valores locos)
+        if 0.5 < fwhm_meas < 20.0:
+            return fwhm_meas
+        else:
+            return np.nan
+
+    except Exception:
+        return np.nan
 
 def perform_photometry(file_path, aperture_radius=15.0, threshold=5.0, fwhm=3.0, box_size=(50, 50), zeropoint=0.0):
     """
@@ -123,16 +176,31 @@ def perform_photometry(file_path, aperture_radius=15.0, threshold=5.0, fwhm=3.0,
             hdu_table['snr'] = np.full(len(hdu_table), np.nan)
             hdu_table['snr'][valid_mask] = hdu_table['flux_sky_sub'][valid_mask] / hdu_table['aperture_sum_err'][
                 valid_mask]
+            # ----------------------------------------------------------
+            # FWHM estimate from sources
+            print(f"HDU {i}: Midiendo FWHM real para {len(sources)} fuentes...")
+            fwhm_measured = []
 
-            # FWHM estimate from sources (if available)
-            if 'fwhm' in sources.colnames:
-                hdu_table['fwhm_est'] = sources['fwhm']
-            else:
-                hdu_table['fwhm_est'] = fwhm  # Global default
+            for row in hdu_table:
+                # Solo medir si SNR es decente (>5) para que el ajuste gaussiano no falle con ruido
+                if row['snr'] > 5:
+                    fval = measure_fwhm_robust(data_sub, row['xcentroid'], row['ycentroid'])
+                else:
+                    fval = np.nan
+                fwhm_measured.append(fval)
 
-            # Add HDU ID
+            hdu_table['fwhm_est'] = np.array(fwhm_measured)
+
+            # Rellenar NaNs con la mediana de los válidos (para no perder datos en plots)
+            valid_fwhms = hdu_table['fwhm_est'][~np.isnan(hdu_table['fwhm_est'])]
+            if len(valid_fwhms) > 0:
+                median_fwhm = np.median(valid_fwhms)
+                # Reemplazar NaNs con mediana (opcional, o dejar NaN)
+                # hdu_table['fwhm_est'] = np.nan_to_num(hdu_table['fwhm_est'], nan=median_fwhm)
+
+            print(f"HDU {i}: FWHM Medio Medido = {np.nanmedian(hdu_table['fwhm_est']):.2f} pix")
+
             hdu_table['hdu_id'] = i
-
             all_tables.append(hdu_table)
             print(f"HDU {i}: Detected {len(hdu_table)} sources.")
 
