@@ -134,6 +134,39 @@ def calculate_effective_gain(args, gain_vector, weights=None, extorder=None):
 
     return effective_gain
 
+
+def calculate_effective_readnoise(args, readnoise_vector, weights=None):
+    """Calcula el ruido de lectura efectivo sumando varianzas en cuadratura.
+
+    Args:
+        args: Argumentos pasados al pipeline (debe contener comb_mode y remove_ext).
+        readnoise_vector (list or np.ndarray): Vector con los valores de ruido de lectura por extensión.
+        weights (list or np.ndarray, optional): Vector de pesos normalizados. Por defecto es None.
+
+    Returns:
+        float: Ruido de lectura efectivo en electrones (e-).
+    """
+    if args.comb_mode == 'weighted' and weights is not None:
+        # Asegurar que sean arrays de numpy y estén normalizados
+        w = np.array(weights)
+        w = w / np.sum(w)
+        rn = np.array(readnoise_vector)
+
+        # Propagación estocástica: sqrt( sum( (w_i * sigma_i)^2 ) )
+        effective_rn = np.sqrt(np.sum((w * rn) ** 2))
+    else:
+        # Promedio simple: suma en cuadratura / N
+        active_exts = [i for i in range(len(readnoise_vector)) if (i + 1) not in args.remove_ext]
+        active_rn = np.array([readnoise_vector[i] for i in active_exts])
+
+        if len(active_rn) > 0:
+            n_active = len(active_rn)
+            effective_rn = np.sqrt(np.sum(active_rn ** 2)) / n_active
+        else:
+            effective_rn = float(readnoise_vector[0])
+
+    return effective_rn
+
 def main():
     parser = argparse.ArgumentParser(description=f"MASSKIP v{__version__} - No warranty of results.")
 
@@ -586,7 +619,7 @@ def main():
                         print(f"ℹ️ Ganancia efectiva: {effective_gain} ADU/e-")
 
                         # Calcular readout noise efectivo
-                        effective_readnoise = calculate_effective_gain(args, readnoise_vector, weights=weights,extorder=extorder)
+                        effective_readnoise = calculate_effective_readnoise(args, readnoise_vector, weights=weights)
                         print(f"ℹ️ Readout noise efectivo: {effective_readnoise:.3f} e-")
 
                         # Calcular satlevel efectivo

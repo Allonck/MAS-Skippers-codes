@@ -1,9 +1,9 @@
 [project]
 name = "mas_skipper_pipeline"
-version = "2.3.2"
+version = "2.3.3"
 description = "Imaging reduction package for the MAS Skipper CCD"
 authors = [
-    {name = "Christopher Montalbán", email = "christopher.montalban@gmail.cl"}
+    {name = "Christopher Montalbán", email = "chris.montalban@gmail.com"}
 ]
 requires-python = ">=3.8"
 license = {text = "MIT"}  # O tu licencia
