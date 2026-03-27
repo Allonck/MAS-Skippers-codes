@@ -1,34 +1,38 @@
-# MASSKIP – Multi-Amplifier Sensing Skipper CCD Pipeline
+# MASSKIP: Multi-Amplifier Sensing Skipper CCD Pipeline
 
-**MASSKIP** is a prototype Python pipeline designed for the basic reduction of images acquired with a **16-channel MAS Skipper CCD**. It supports MEF (Multi-Extension FITS) files and follows a standard overscan + bias + flat calibration procedure, inspired by data reduction pipelines such as SOAR/Goodman.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![DOI](https://zenodo.org/badge/968102861.svg)](https://doi.org/10.5281/zenodo.19260714)
+
+
+**MASSKIP** is a modular Python pipeline designed for the reduction, calibration, and photometric analysis of images acquired with **Multi-Amplifier Sensing (MAS) Skipper CCDs**. 
+
+Originally developed and tested for the 16-channel MAS prototype at the SMARTS 0.9m telescope (CTIO), this pipeline is optimized to handle the specific challenges of Skipper CCDs, such as amplifier heterogeneity and deep sub-electron read noise regimes. It supports Multi-Extension FITS (MEF) files and follows standard reduction procedures enhanced by dynamic noise-weighted algorithms.
 
 ---
 
-## 🧰 Features (At the moment of 2.3.3)
+## 🧰 Core Features
 
-- ✅ Overscan correction per extension (with independent ROI shifting considering crosstalk).
-- ✅ Pixel-by-pixel bias subtraction.
-- ✅ Normalized master flat creation.
-- ✅ Flat-fielding normalization with pixel-wise division and polynomial fitting.
-- ✅ Extension-preserving output compatible with `ds9 -mosaicimage iraf`.
-- ✅ Multiple simple and graphical SNR-weighted based combination of images using mean.
-- ✅ Cosmic rays rejection available and enhanced.
-- ✅ Add WCS.
-- ✅ Add full ROI support.
-- ✅ ADUs to e- values available in final combined images.
-- ✅ Header history in final combined images.
-- ✅ Add Photometry module.
-- ⚙️ CLI tool: `mas-ccd` for batch reduction.
-- ⚙️ CLI tool: `mas-phot` for photometry analysis.
-- ⚙️ CLI tool: `mas-stack` for stacking and rgb composing.
-- ⚙️ CLI tool: `mas-inspect` for flat-normalization tuning.
+* **Advanced Calibration:**
+  * Overscan correction per extension (with independent ROI shifting for crosstalk mitigation).
+  * Pixel-by-pixel bias subtraction.
+  * Normalized master flat creation (pixel-wise division and polynomial fitting).
+* **Noise-Optimized Combination:**
+  * Multiple image combination methods, including **Variance/SNR-weighted combination** to dynamically suppress noisy amplifiers and achieve theoretical sub-electron read noise limits.
+* **Astrometry & Cosmic Rays:**
+  * Enhanced cosmic ray rejection and dynamic WCS injection.
+* **Ready-to-Use Science Outputs:**
+  * Extension-preserving outputs compatible with `ds9 -mosaicimage iraf`.
+  * Physical unit conversion (ADUs to $e^-$) preserved in the final combined headers.
+* **Integrated Analysis Tools:**
+  * Built-in photometry module (`mas-phot`) utilizing `photutils` (DAOFIND/DAOPHOT).
+  * Fast stacking and RGB composing (`mas-stack`).
 
 ---
 
 ## 📦 Installation with venv
 
 ```bash
-git clone https://github.com/Allonck/MAS-Skippers-codes.git
+git clone [https://github.com/Allonck/MAS-Skippers-codes.git](https://github.com/Allonck/MAS-Skippers-codes.git)
 cd MAS
 python3 -m venv .maspipeline
 source .maspipeline/bin/activate
@@ -44,48 +48,37 @@ mas-ccd -h
 ```bash
 pip install jupyter ipykernel
 python -m ipykernel install --user --name=.venv --display-name "MASSKIP-env"
-```
-Then you can create an .ipynb file, go to "Kernel" -> "Change Kernel" -> "Select 'MASSKIP-env'"
+``` 
 
-## ⚙️ Example Use of CLI
+In Jupyter, select `Kernel` -> `Change Kernel` -> `MASSKIP-env`.
 
+---
+
+## ⚙️ Usage Examples (CLI)
+
+MASSKIP provides Command Line Interfaces (CLI) also.
+
+### 1. Full Data Reduction (`mas-ccd`)
+
+```bash
 mas-ccd \
   --full-reduction \
-  --sci-pattern "science_filename_*.fits" 
-  
-This will:
+  --sci-pattern "science_filename_*.fits"
+```
 
-   * Apply overscan correction to all biases.
+* Workflow executed: `Overscan correction` -> `Sigma-clipped Master Bias generation` -> `Bias subtraction` -> `Master Flat generation` -> `Flat-fielding` -> `Cosmic ray rejection` -> `WCS addition` -> `Multi-extension combination`.
 
-   * Generate a master bias with sigma clipping.
+### 2. Photometric Analysis (`mas-phot`)
 
-   * Apply overscan + bias subtraction to science images.
-
-   * Generate a normalized master flat.
-
-   * Apply flat-fielding to all bias-corrected science images.
-
-   * Add WCS
-
-   * Annihilate cosmic rays.
-
-   * Combine all the extensions into a Photometry / Astrometry ready Science image.
-
-## Auxiliary CLI
-
+```bash
 mas-phot \
   --input "science_filename_*.fits" \
   --aperture-radius 10 \
   --do-visualize \
   --zeropoint 25
-  
-This will:
+```
 
-   * Apply DAOFIND and DAOPHOT implementation of photutils.
-
-   * Plot apertures in a interactive window.
-
-   * Generate an output photometric catalog.
+* Workflow executed: `Source detection (DAOFIND)` -> `Aperture Photometry` -> `Interactive visual plotting` -> `Photometric catalog generation.`.
 
 ---
 
@@ -101,17 +94,37 @@ deactivate
 
 ---
 
-## IMPORTANT NOTES
+## Architecture & Important Notes
 
-* Assumes 16 extensions (excluding primary HDU).
+* Sensor geometry: The current build assumes a 16-extension MEF format (excluding primary HDU).
 
-* Overscan ROI is fixed but can be shifted per extension using roi_shifting().
+* Overscan and Extension order: Fixed by default but can be changed using the `roi_shifting()` module.
 
-* Headers are preserved in all outputs to support DS9 visualization (-mosaic iraf) and only modifies the keyword DATASEC.
-
-* The pipeline is modular and intended for further extension in the near future (e.g. decorrelation, photometry, astrometry).
+* Header Preservation: FITS headers are strictly preserved in all intermediate outputs to support DS9 visualization (`-mosaic iraf`). The pipeline only modifies the DATASEC keyword when needed.
 
 ---
-## Credits
 
-Developed by @Allonck, originally for internal use with the [SMARTS 0.9m telescope@CTIO with a 16ch-MAS belonging to LBNL & Fermilab, characterized and tested at NOIRLab].
+## Citation
+
+If you use MASSKIP in your research, please cite the software using the following BibTeX entry:
+
+```bibtex
+@software{masskip_2026,
+  author       = {Montalbán, C. K.},
+  title        = {{MASSKIP: Multi-Amplifier Sensing Skipper CCD Pipeline}},
+  month        = mar,
+  year         = 2026,
+  publisher    = {Zenodo},
+  version      = {v2.3.3},
+  doi          = {10.5281/zenodo.19260715},
+  url          = {[https://github.com/Allonck/MAS-Skippers-codes/tree/refactor](https://github.com/Allonck/MAS-Skippers-codes/tree/refactor)}
+}
+```
+---
+## Acknowledgments & Credits
+
+MASSKIP was developed by @Allonck at the Universidad de La Serena.
+
+The pipeline was originally designed to process data from the SMARTS 0.9m telescope at the Cerro Tololo Inter-American Observatory (CTIO, part of NSF-NOIRLab) using a 16-channel MAS Skipper CCD prototype developed by LBNL & Fermilab, characterized and tested at NOIRLab.
+
+License: This project is licensed under the MIT License - see the LICENSE file for details.
