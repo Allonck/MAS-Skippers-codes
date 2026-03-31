@@ -117,13 +117,21 @@ def plot_phase_diagram(waveforms):
         ax.set_ylabel(clock, rotation=0, ha='right', va='center', fontsize=12, labelpad=15)
         ax.set_ylim(-0.2, 1.2)
         ax.set_yticks([]) 
+        ax.set_xticks([]) 
         
         for spine in ['top', 'right', 'bottom', 'left']:
             ax.spines[spine].set_visible(False)
 
     axs[-1].spines['bottom'].set_visible(False)
+    
     #axs[-1].set_xlabel('Tiempo de Ejecución (unidades arbitrarias del secuenciador)', fontsize=12)
     
+    # Guarda en PNG con alta resolución y sin márgenes
+    plt.savefig('waveforms.png', bbox_inches='tight', dpi=300)
+    
+    # Guarda en PDF en formato vectorial y sin márgenes
+    plt.savefig('waveforms.pdf', bbox_inches='tight')
+
     plt.show()
 
 if __name__ == '__main__':
@@ -142,7 +150,7 @@ if __name__ == '__main__':
         'RG': ['RGB'],        # Reset Gate (Activo en BAJO, el pulso se crea al apagar RGB)
         'PS': ['DGB'], # Pixel Separation
         'DG': ['DGA'], # Dump Gate
-        'Integ (PED/SIG)': ['HD1', 'HD2'] 
+        'Int': ['HD1', 'HD2'] 
     }
     
     delays, states, recipes = parse_xml_sequencer_robust(args.file)
