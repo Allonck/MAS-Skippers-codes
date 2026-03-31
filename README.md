@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![DOI](https://zenodo.org/badge/968102861.svg)](https://doi.org/10.5281/zenodo.19260714)
-
+<a href="https://ascl.net/2603.022"><img src="https://img.shields.io/badge/ascl-2603.022-blue.svg?colorB=262255" alt="ascl:2603.022" /></a>
 
 **MASSKIP** is a modular Python pipeline designed for the reduction, calibration, and photometric analysis of images acquired with **Multi-Amplifier Sensing (MAS) Skipper CCDs**. 
 
