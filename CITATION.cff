@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Montalbán"
+    given-names: "Christopher K."
+    orcid: "https://orcid.org/0009-0005-5749-4202"
+title: "MASSKIP: Multi-Amplifier Sensing Skipper CCD Pipeline"
+version: 2.3.3
+doi: "10.5281/zenodo.19260715"
+date-released: 2026-03-31
+identifiers:
+  - type: ascl
+    value: "ascl:2603.022"
+url: "https://ascl.net/2603.022"
+repository-code: "https://github.com/Allonck/MAS-Skippers-codes/tree/refactor"
